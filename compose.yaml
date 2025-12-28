@@ -1,0 +1,47 @@
+services:
+  cat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cat:latest
+    container_name: cat
+    
+    # [核心修改 1] 共享内存机制
+    # 原先的 'shm_size: 16gb' 在 H800 双卡跑大模型 TP 时可能不够用，会导致 NCCL Bus Error。
+    # 'ipc: host' 允许容器直接使用宿主机的共享内存，是 PyTorch 多卡训练/推理的最佳实践。
+    ipc: host
+    
+    # [核心修改 2] 显卡资源声明 (Modern Docker Standard)
+    # 虽然 runtime: nvidia 也能用，但 deploy 语法兼容性更好
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+              # ==================== GPU 设备选择 ====================
+              # [使用全部 GPU] 取消下行注释，并注释 device_ids
+              # count: all
+              # [限制 GPU 1 和 3] 当前生效
+              device_ids: ['1']
+              
+    environment:
+      # ==================== 固定配置 ====================
+      - VLLM_ATTENTION_BACKEND=FLASHINFER
+      - VLLM_CONFIGURE_LOGGING=0    # 防止 vLLM 接管日志配置
+      
+      
+    volumes:
+      # 挂载项目代码
+      - .:/workspace/cat
+      # 挂载模型目录（NFS 真实路径）
+      - /home/data/models/base:/workspace/cat/models
+      # 挂载数据目录（NFS 真实路径）
+      - /home/data/zhouyf/context-as-teacher/data:/workspace/cat/data
+      # 挂载 HuggingFace 缓存，避免重复下载
+      - /home/zhouyf/.cache/huggingface:/root/.cache/huggingface
+      
+    # 保持后台运行，方便交互
+    stdin_open: true
+    tty: true
+    working_dir: /workspace/cat

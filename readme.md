@@ -55,10 +55,10 @@
 我们采用改进版的 **Generalized Knowledge Distillation (GKD)** 循环：
 
 1. **探索 (Exploration):** 学生模型 自主生成回答 (On-policy)。
-2. **记忆检索 (Memory Retrieval):** 教师检索当前最优的 **Cached Memory** (Prompt )。
-3. **反思性监督 (Reflective Supervision):** 教师在 的辅助下，对 进行评估或重新生成“金标准”推理路径 。
-4. **更新 (Update):** 最小化学生（裸模型）与教师（Prompt增强模型）之间的 KL 散度：
-
+2. **记忆检索 (Memory Retrieval):** 教师从 **Cached Memory**中获取这道题目对应的 memory (Prompt )。
+3. **反思性监督 (Reflective Supervision):** 教师在的辅助下，生成新的推理路径 。
+4. **提升判断** 查看教师和学生的正确率，如果教师高，那么按照 on-poicy distillation构造loss函数，如果学生高，那么按照GRPO构造loss函数。
+5. **更新 (Update):** 使用loss函数进行更新。
 ---
 
 ## 📊 核心特性 (Key Features)
