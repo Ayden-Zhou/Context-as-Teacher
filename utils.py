@@ -2,7 +2,7 @@ from contextlib import ContextDecorator
 from time import perf_counter
 from typing import List, Dict, Optional, Iterator, Tuple
 from math_verify import parse, verify
-
+import numpy as np
 
 _THINK_MARKERS = {
     "qwen": ("<think>", "</think>"),
@@ -133,7 +133,7 @@ def equal_func(answer: str, ground_truth: str) -> bool:
         # 防止极端情况下解析器崩溃（例如输入了极其畸形的 LaTeX）
         return False
 
-def extract_think_contents(
+def split_trace(
     traces: List[str],
     model_type: str = "qwen",
 ) -> Iterator[Tuple[Optional[str], Optional[str]]]:
@@ -144,3 +144,21 @@ def extract_think_contents(
             yield trace.split(start, 1)[1].split(end, 1)[0].strip(), trace.split(end, 1)[1].strip()
         else:
             yield trace.strip() if trace else None, None  # 没有完整标记，全部当作 reasoning
+
+def pass_at_k(num_traces: int, num_correct: int, k: int) -> float:
+    """计算 pass@k 期望值。
+
+    Args:
+        num_traces: 总样本数（trace 数）
+        num_correct: 正确样本数（正确 trace 数）
+        k: 采样数
+
+    Returns:
+        pass@k 概率
+    """
+    if num_traces - num_correct < k:
+        return 1.0
+    # 数值稳定的计算方式: 1 - ∏_{i=0}^{k-1} (n-c-i) / (n-i)
+    return 1.0 - np.prod(
+        [(num_traces - num_correct - i) / (num_traces - i) for i in range(k)]
+    )

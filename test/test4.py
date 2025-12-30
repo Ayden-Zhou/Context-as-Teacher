@@ -7,7 +7,10 @@
 import re
 from math_verify import parse as mv_parse
 from latex2sympy2_extended import latex2sympy
-from sympy import simplify, srepr
+from sympy import simplify, srepr, nsimplify
+
+from typing import List
+
 
 # ==========================================
 # 选手 A: Math Verify (封装库)
@@ -30,10 +33,11 @@ def clean_with_math_verify(text: str) -> str:
 # ==========================================
 def clean_with_custom(text: str) -> str:
     """latex2sympy2 配合针对性正则清洗"""
-    # 1. 预处理 (Pre-processing) - 解决 math_verify 的痛点
+    from sympy import nsimplify, Rational
+    
+    # 1. 预处理 (Pre-processing)
     # 修复隐式乘法: 0.5x -> 0.5*x, 2\sqrt -> 2*\sqrt
     text = re.sub(r'(\d)([a-zA-Z\\])', r'\1*\2', text)
-    
     # 移除 GSM8K 常见的干扰符
     text = text.replace("$", "").replace(",", "")
 
@@ -42,28 +46,36 @@ def clean_with_custom(text: str) -> str:
         sym = latex2sympy(text)
         
         # 3. 规范化 (Canonicalization)
-        # 统一化简 (处理 x+1 vs 1+x)
-        simple_sym = simplify(sym)
+        # nsimplify: 将浮点数转为有理数 (0.5 -> 1/2)，统一代数表示
+        sym = nsimplify(sym, rational=True)
+        sym = simplify(sym)
         
-        # 统一数值类型 (处理 1/2 vs 0.5)
-        # 策略：如果是纯数，统一转为 float 字符串并保留一定精度，方便聚类
-        if simple_sym.is_number:
-            # 这里的逻辑可以根据你的聚类严格程度调整
-            return f"{float(simple_sym):.6g}" 
+        # 纯数值：统一转 float
+        if sym.is_number:
+            return f"{float(sym):.6g}"
         
-        # 代数式则返回其内部结构字符串 (srepr 是最稳健的指纹)
-        return str(simple_sym).replace(" ", "")
+        # 代数式：用 srepr 获取结构指纹（最稳健）
+        return srepr(sym)
         
     except Exception:
-        # 兜底：如果不是数学公式，进行简单的字符串清洗
         return "STR:" + text.strip()
+
+# ==========================================
+# 选手 C: Math Verify + SymPy 归一化
+# ==========================================
+def clean_answer(answer: List[str]) -> List[str]:
+    """将数学答案规范化为统一表示，使等价答案产生相同输出。"""
+    try:
+        return str(nsimplify(simplify(mv_parse(answer)[0]), rational=True))
+    except Exception:
+        return answer
 
 # ==========================================
 # 🧪 测试用例集 (模拟 HMMT/GSM8K/BRUMO)
 # ==========================================
 # 等价表达式组：每组内的写法应该归一化为相同结果
 equivalent_groups = [
-    ("1,000", "1000", "$1,000"),                          # 千位数
+    ("1,000", "1000", "$1,000"),                        # 千位数
     ("1/2", "0.5", r"\frac{1}{2}"),                       # 二分之一
     ("x + 1", "1 + x"),                                   # 代数式顺序
     ("0.5x", r"\frac{1}{2}x", r"\frac{x}{2}"),            # 半x
@@ -82,8 +94,7 @@ def test_clean_func(clean_func, name: str) -> tuple[int, int]:
         
         status = "✅" if ok else "❌"
         print(f"{status} {group}")
-        if not ok:
-            print("   " + " | ".join(f"{e!r}→{r}" for e, r in zip(group, results)))
+        print("   " + " | ".join(f"{e!r}→{r}" for e, r in zip(group, results)))
     
     print(f"\n通过: {passed}/{passed + failed}")
     return passed, failed
@@ -91,3 +102,4 @@ def test_clean_func(clean_func, name: str) -> tuple[int, int]:
 if __name__ == "__main__":
     test_clean_func(clean_with_math_verify, "Math Verify")
     test_clean_func(clean_with_custom, "Latex2Sympy + Custom")
+    test_clean_func(clean_answer, "Math Verify + SymPy 归一化")
