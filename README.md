@@ -1,5 +1,22 @@
+# context-as-tearcher
 
-# Cached Memory can Accelerate RL Training
+A research project
+
+## Quick Start
+
+```bash
+# 安装依赖
+just setup
+
+# 格式化代码
+just fmt
+
+# 运行检查
+just check
+```
+
+
+## Cached Memory can Accelerate RL Training
 
 |  ---| 内部 | 外部 |
 | --- | --- | --- |
@@ -11,7 +28,7 @@
 > TL;DR: 我们提出了一种全新的训练范式，将 Prompt Context 视为模型的 "Cached Memory"（缓存记忆）。与其让模型在强化学习（RL）中盲目探索，不如先利用 OPRO 在上下文窗口中构建高效的解题策略（短期记忆），然后通过 On-Policy Distillation 将这些策略“内化”到模型的权重中（长期记忆）。
 > 
 
----
+
 
 ## 🚀 背景与动机 (Motivation)
 
@@ -25,7 +42,7 @@
 **我们的方案：**
 引入一个由 **OPRO** 驱动的 **动态教师 (Dynamic Teacher)**。教师维护着一个包含成功推理模式的“缓存记忆”（不断进化的 Prompt）。随着训练的进行，教师通过更新记忆变得越来越聪明，从而为学生模型提供比简单的标量奖励（Scalar Rewards）更丰富、更稠密的监督信号。
 
----
+
 
 ## 🧠 核心理念 (Conceptual Framework)
 
@@ -69,3 +86,7 @@
 利用 Context 的易变性优势。当 Student 犯错时，OPRO 瞬间更新 Teacher 的 Cached Memory（修改 Prompt），立刻在下一个 Batch 提供修正后的指导，避免了传统 RL 梯度更新的滞后性。
 - **高带宽监督 (Dense Supervision)**
 打破 RL 稀疏奖励（Scalar Reward）的瓶颈。Teacher 利用 Cached Memory 生成高质量的 Token 级分布，让 Student 通过 KL 散度全带宽地“下载”解题逻辑，大幅提升样本效率。
+
+## Author
+
+Zhou Yunfan <zhou.yunfan@sjtu.edu.cn>

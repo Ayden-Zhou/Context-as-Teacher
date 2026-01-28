@@ -1,0 +1,32 @@
+[project]
+name = "context-as-tearcher"
+version = "0.1.0"
+description = "A research project"
+authors = [{ name = "Zhou Yunfan", email = "zhou.yunfan@sjtu.edu.cn" }]
+requires-python = ">=3.10"
+dependencies = [
+    "vllm",
+    "pandas",
+    "pyarrow",
+    "numpy",
+    "fire",
+    "datasets",
+    "trl",
+]
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "jupytext",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"

@@ -4,8 +4,10 @@
 - MATH 标准：基于字符串的精确匹配（提取 \\boxed{}）
 - 展示 Harness 默认逻辑的局限性（不支持数学等价性）
 """
-import re
+
 import math
+import re
+
 
 class HarnessMathEval:
     """
@@ -22,7 +24,7 @@ class HarnessMathEval:
         """
         if "####" in text:
             text = text.split("####")[-1]
-        
+
         # 移除逗号 (例如 1,000 -> 1000) 并去除空白
         return text.replace(",", "").strip()
 
@@ -35,7 +37,7 @@ class HarnessMathEval:
         """
         # 非贪婪匹配最后一个 boxed
         # Harness 实际上有一个极其复杂的 remove_boxed 脚本，这里取最核心的逻辑
-        matches = re.findall(r'\\boxed\{(.*?)\}', text)
+        matches = re.findall(r"\\boxed\{(.*?)\}", text)
         if matches:
             return matches[-1]  # 通常取最后一个
         return text
@@ -69,10 +71,12 @@ class HarnessMathEval:
         # 标准化：去除所有空白字符
         norm_pred = "".join(clean_pred.split())
         norm_gold = "".join(clean_gold.split())
-        
+
         return norm_pred == norm_gold
 
+
 # ================= 演示 =================
+
 
 def main():
     print("=== EleutherAI Harness 核心逻辑演示 ===\n")
@@ -83,7 +87,7 @@ def main():
     # 特点：答案在 #### 之后，允许数值格式差异 (1,000 vs 1000)
     pred_gsm = "计算过程略... 答案是 #### 1,000.00"
     gold_gsm = "1000"
-    
+
     print(f"Case 1 [GSM8K]: {pred_gsm} vs {gold_gsm}")
     passed = evaluator.is_equiv_gsm8k(pred_gsm, gold_gsm)
     print(f"Result: {'✅ Pass' if passed else '❌ Fail'}")
@@ -93,7 +97,7 @@ def main():
     # 特点：提取 Boxed，忽略空格
     pred_math = "The value is \\boxed{ x + y }"
     gold_math = "\\boxed{x+y}"
-    
+
     print(f"Case 2 [MATH]:  {pred_math} vs {gold_math}")
     passed = evaluator.is_equiv_math(pred_math, gold_math)
     print(f"Result: {'✅ Pass' if passed else '❌ Fail'}")
@@ -104,10 +108,11 @@ def main():
     # 这就是为什么之前推荐 math_verify 的原因，但这是 Harness 的真实表现。
     pred_fail = "\\boxed{0.5}"
     gold_fail = "\\boxed{1/2}"
-    
+
     print(f"Case 3 [Limit]: {pred_fail} vs {gold_fail}")
     passed = evaluator.is_equiv_math(pred_fail, gold_fail)
     print(f"Result: {'✅ Pass' if passed else '❌ Fail (Harness默认行为)'}")
+
 
 if __name__ == "__main__":
     main()

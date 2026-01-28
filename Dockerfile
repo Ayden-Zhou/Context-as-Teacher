@@ -21,50 +21,34 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装 Miniconda 
-RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh \
-    && bash /tmp/miniconda.sh -b -p /opt/conda \
-    && rm /tmp/miniconda.sh
-ENV PATH="/opt/conda/bin:$PATH"
+# 安装 uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# 3. 接受 conda 服务条款并创建 Python 3.12 环境
-RUN conda config --set solver classic \
-    && conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main \
-    && conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r \
-    && conda create -n cat python=3.12 -y
+# 使用 uv 安装 Python 3.12 并创建虚拟环境
+ENV UV_PYTHON_DOWNLOADS=automatic
+RUN uv python install 3.12
 
-# 设置默认 Shell，确保后续命令在 conda 环境中执行
-SHELL ["conda", "run", "-n", "cat", "/bin/bash", "-c"]
-
-# ============================================
-# 4. 核心安装：vLLM (自动处理 PyTorch 依赖)
-# ============================================
-# 升级 pip 和 uv
-RUN pip install --upgrade pip uv
-
-# 直接安装 vllm。
-# 它会自动拉取 torch 2.5.1+cu124 (或类似兼容版本)
-# 也会自动安装适用于 H800 的 flash-attention
-RUN uv pip install vllm
-
-# ============================================
-# 5. 安装其他项目依赖
-# ============================================
-# 安装 Dynasor (配置代理)
-RUN http_proxy=http://iscs1411:14111234@202.120.40.41:9081 \
-    https_proxy=http://iscs1411:14111234@202.120.40.41:9081 \
-    uv pip install git+https://github.com/hao-ai-lab/Dynasor.git
-
-# 安装数据处理库和工具
-# 移除 transformers 版本锁定，让 vLLM 决定版本
-RUN uv pip install pandas pyarrow numpy fire datasets
-
-# 6. 设置工作空间
+# 设置工作空间
 WORKDIR /workspace/cat
 
-# 7. 配置启动环境
-RUN conda init bash && echo "conda activate cat" >> ~/.bashrc
+# 创建虚拟环境
+ENV VIRTUAL_ENV=/workspace/cat/.venv
+RUN uv venv $VIRTUAL_ENV --python 3.12
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+# ============================================
+# 安装项目依赖 (通过 pyproject.toml + uv.lock)
+# ============================================
+# 先复制依赖定义文件（利用 Docker 层缓存）
+COPY pyproject.toml uv.lock ./
+
+# 根据 lock 文件安装依赖（不更新 lock，不安装 dev 依赖）
+# vllm 会自动拉取 torch 2.5.1+cu124 和 flash-attention
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev
+
+# 7. 配置启动环境 (虚拟环境通过 PATH 自动激活)
+RUN echo "source $VIRTUAL_ENV/bin/activate" >> ~/.bashrc
 
 # 8. 入口
-ENTRYPOINT ["conda", "run", "--no-capture-output", "-n", "cat"]
 CMD ["/bin/bash"]

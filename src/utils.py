@@ -1,13 +1,18 @@
 from contextlib import ContextDecorator
 from time import perf_counter
-from typing import List, Dict, Optional, Iterator, Tuple
-from math_verify import parse, verify
+from typing import Dict, Iterator, List, Optional, Tuple
+
 import numpy as np
+from math_verify import parse, verify
 
 _THINK_MARKERS = {
     "qwen": ("<think>", "</think>"),
-    "gpt": ("<|channel|>analysis<|message|>", "<|end|><|start|>assistant<|channel|>final<|message|>"),
+    "gpt": (
+        "<|channel|>analysis<|message|>",
+        "<|end|><|start|>assistant<|channel|>final<|message|>",
+    ),
 }
+
 
 class Timer(ContextDecorator):
     """轻量计时器。
@@ -26,13 +31,15 @@ class Timer(ContextDecorator):
 
     registry: Dict[str, float] = {}
 
-    def __init__(self,
-                 label: str = "timer",
-                 text: str = "{label} in {seconds:.2f} seconds",
-                 start: Optional[str] = None,
-                 sink=print,
-                 record: bool = True,
-                 accumulate: bool = False):
+    def __init__(
+        self,
+        label: str = "timer",
+        text: str = "{label} in {seconds:.2f} seconds",
+        start: Optional[str] = None,
+        sink=print,
+        record: bool = True,
+        accumulate: bool = False,
+    ):
         self.label = label
         self.text = text
         self.start = start
@@ -101,24 +108,25 @@ def extract_answer(text: str) -> Optional[str]:
                     a += c
         else:
             a = ans.split("$")[0].strip()
-        
+
         # 清理 LaTeX \text{} 标记
         result = a.strip()
-        if '\\text{' in result and '}' in result:
-            while '\\text{' in result:
-                start = result.find('\\text{')
+        if "\\text{" in result and "}" in result:
+            while "\\text{" in result:
+                start = result.find("\\text{")
                 if start == -1:
                     break
-                end = result.find('}', start)
+                end = result.find("}", start)
                 if end == -1:
                     break
                 # Replace \text{content} with just content
-                content = result[start + 6:end]  # 6 is length of '\text{'
-                result = result[:start] + content + result[end + 1:]
-        
+                content = result[start + 6 : end]  # 6 is length of '\text{'
+                result = result[:start] + content + result[end + 1 :]
+
         return result
 
     return None
+
 
 def equal_func(answer: str, ground_truth: str) -> bool:
     """
@@ -133,6 +141,7 @@ def equal_func(answer: str, ground_truth: str) -> bool:
         # 防止极端情况下解析器崩溃（例如输入了极其畸形的 LaTeX）
         return False
 
+
 def split_trace(
     traces: List[str],
     model_type: str = "qwen",
@@ -141,9 +150,16 @@ def split_trace(
     start, end = _THINK_MARKERS[model_type]
     for trace in traces:
         if trace and start in trace and end in trace:
-            yield trace.split(start, 1)[1].split(end, 1)[0].strip(), trace.split(end, 1)[1].strip()
+            yield (
+                trace.split(start, 1)[1].split(end, 1)[0].strip(),
+                trace.split(end, 1)[1].strip(),
+            )
         else:
-            yield trace.strip() if trace else None, None  # 没有完整标记，全部当作 reasoning
+            yield (
+                trace.strip() if trace else None,
+                None,
+            )  # 没有完整标记，全部当作 reasoning
+
 
 def pass_at_k(num_traces: int, num_correct: int, k: int) -> float:
     """计算 pass@k 期望值。
