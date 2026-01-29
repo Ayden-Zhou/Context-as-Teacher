@@ -12,6 +12,8 @@ dependencies = [
     "fire",
     "datasets",
     "trl",
+    "latex2sympy2>=1.9.1",
+    "math-verify>=0.1.0",
 ]
 
 [dependency-groups]

@@ -1,15 +1,68 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn.functional as F
 from trl import GKDTrainer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 if TYPE_CHECKING:
-    from transformers import PreTrainedTokenizerBase
+    from torch.utils.data import DataLoader
+    from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
+    from .dataclass import Batch
     from .memory import CachedMemory
+
+
+# ==================== RL 风格训练接口 ====================
+
+
+def train_step(
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizerBase,
+    batch: Any,  # Batch
+    memory: CachedMemory,
+    cfg: Any,
+) -> torch.Tensor:
+    """单步蒸馏训练，返回 loss（不含 backward）。
+    
+    Args:
+        model: HuggingFace 模型
+        tokenizer: 分词器
+        batch: 包含 prompts 和 response_ids 的 Batch
+        memory: CachedMemory
+        cfg: 配置
+    
+    Returns:
+        loss: 蒸馏损失（需要外部调用 backward）
+    """
+    # TODO: 实现单步训练
+    # 1. tokenize prompts → prompt_ids
+    # 2. cat(prompt_ids, response_ids) → input_ids
+    # 3. student_logits = model(input_ids)
+    # 4. teacher_logits = model(memory + input_ids) [no_grad]
+    # 5. loss = topk_reverse_kl(student, teacher)
+    # return loss
+    
+    return torch.tensor(0.0, requires_grad=True)
+
+
+def topk_reverse_kl(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    k: int = 50,
+) -> torch.Tensor:
+    """计算 Top-K Reverse KL: KL(student || teacher)。"""
+    topk_vals, topk_idx = student_logits.topk(k, dim=-1)
+    student_probs = F.softmax(topk_vals, dim=-1)
+    student_log_probs = F.log_softmax(topk_vals, dim=-1)
+    teacher_log_probs = F.log_softmax(teacher_logits.gather(-1, topk_idx), dim=-1)
+    return (student_probs * (student_log_probs - teacher_log_probs)).sum(-1).mean()
+
+
+# ==================== 原有的 Trainer 类（备用）====================
 
 
 class ContextDistillationTrainer(GKDTrainer):
@@ -23,8 +76,12 @@ class ContextDistillationTrainer(GKDTrainer):
 
     def __init__(
         self,
+        cfg: Any,
         memory: CachedMemory,
-        tokenizer: PreTrainedTokenizerBase,
+        model_root: Path,
+        latest_checkpoint: Path,
+        load_checkpoint: Path,
+        tokenizer: PreTrainedTokenizerBase | None = None,
         max_new_tokens: int = 512,
         temperature: float = 1.0,
         top_k: int = 50,
@@ -32,14 +89,68 @@ class ContextDistillationTrainer(GKDTrainer):
         **kwargs,
     ):
         super().__init__(teacher_model=None, *args, **kwargs)
+        self.cfg = cfg
         self.memory = memory
+        self.model_root = model_root
+        self.latest_checkpoint = latest_checkpoint
+        self.load_checkpoint = load_checkpoint
         self.tokenizer = tokenizer
+        self.model: PreTrainedModel | None = None
+        self.optimizer: torch.optim.Optimizer | None = None
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
         self.top_k = top_k
         # Memory 缓存
         self._cached_memory_ids: torch.Tensor | None = None
         self._cached_memory_version: int = -1
+
+    def start_train(self) -> None:
+        """加载训练所需资源（按阶段调用）。"""
+        if self.tokenizer is None:
+            self.tokenizer = AutoTokenizer.from_pretrained(self.load_checkpoint)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.load_checkpoint,
+            torch_dtype=torch.bfloat16,
+            device_map=self.cfg.device,
+        )
+        self.optimizer = torch.optim.AdamW(
+            self.model.parameters(), lr=self.cfg.learning_rate
+        )
+
+    def update(self, batch: "Batch", global_step: int) -> int:
+        """更新一步并返回更新后的 global_step。"""
+        if self.model is None or self.optimizer is None or self.tokenizer is None:
+            raise RuntimeError("训练未启动，请先调用 start_train()")
+
+        loss = train_step(self.model, self.tokenizer, batch, self.memory, self.cfg)
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        global_step += 1
+
+        if global_step % 10 == 0:
+            print(f"       step {global_step}, loss: {loss.item():.4f}")
+
+        return global_step
+
+    def finish_train(self, global_step: int) -> None:
+        """保存模型并释放资源（按阶段调用）。"""
+        if self.model is None:
+            return
+
+        self.latest_checkpoint.mkdir(parents=True, exist_ok=True)
+        self.model.save_pretrained(self.latest_checkpoint)
+        if global_step % self.cfg.save_model_freq == 0:
+            step_checkpoint = self.model_root / f"step_{global_step:06d}"
+            step_checkpoint.mkdir(parents=True, exist_ok=True)
+            self.model.save_pretrained(step_checkpoint)
+
+        del self.model, self.optimizer
+        self.model = None
+        self.optimizer = None
+        torch.cuda.empty_cache()
+
+        self.load_checkpoint = self.latest_checkpoint
 
     # ==================== Memory 管理 ====================
 

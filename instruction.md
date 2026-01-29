@@ -31,111 +31,116 @@
 ### 基础框架
 
 * **生成**：`vLLM`（高效采样，PagedAttention）。
-* **训练**：`trl.GKDTrainer`（HuggingFace，支持梯度）。
-* **模型**：单个 `AutoModelForCausalLM`，vLLM 和 HF 共享权重（定期同步）。
-* **配置**：`GKDConfig(beta=0.0)`（纯策略内 KL）。
+* **训练**：HuggingFace `Trainer`（支持梯度）。
+* **解耦策略**：时间复用。vLLM 和 HF 不同时占用 GPU，交替加载释放。
+* **配置**：纯策略内 Top-K KL。
 
 ### 整体逻辑（`src/main.py`）
 
+RL 风格 Rollout + Train 循环。每次生成 `batch_size × responses_per_prompt` 条 response，训练 `gradient_steps` 步。
+
+``` text
+┌─────────────────────────────────────────────────────────────────────────┐
+│  RL-Style Training Loop                                                 │
+│  while global_step < total_steps:                                       │
+│                                                                         │
+│    ┌─────────────────────────────────────────────────────────────────┐  │
+│    │  Phase 1: Rollout (vLLM)                                        │  │
+│    │  batch = next(data_iter)  # batch_size 个问题                   │  │
+│    │  rollout_buffer = generate_rollout(batch, checkpoint, cfg)      │  │
+│    │  # rollout_buffer: batch_size × responses_per_prompt 条 response │  │
+│    └─────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+│    ┌─────────────────────────────────────────────────────────────────┐  │
+│    │  Phase 2: Train (HuggingFace)                                   │  │
+│    │  response_batches = rollout_buffer.split(batch_size, shuffle=T) │  │
+│    │  trainer.start_train()                                          │  │
+│    │  for i in range(gradient_steps):                                │  │
+│    │      global_step = trainer.update(next(cycle(response_batches)))│  │
+│    │  trainer.finish_train(global_step)                              │  │
+│    └─────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+│    ┌─────────────────────────────────────────────────────────────────┐  │
+│    │  Phase 3: Memory Update (optional)                              │  │
+│    │  # memory.update(...)                                           │  │
+│    └─────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
-┌───────────────────────────────────────────────────────────────────┐
-│  Outer Loop (Memory Evolution)                                    │
-│  for epoch in range(num_epochs):                                  │
-│    ┌───────────────────────────────────────────────────────────┐  │
-│    │  Inner Loop (Distillation Training)                       │  │
-│    │  for batch in dataloader:                                 │  │
-│    │    sample.generate(batch) → batch.response_ids            │  │
-│    │    HF Student(batch.input_ids) → student_log_probs        │  │
-│    │    HF Teacher([M] + input_ids) → teacher_log_probs        │  │
-│    │    loss = TopK_ReverseKL(S, T) → backward → update θ_HF   │  │
-│    │    if step % sync_interval == 0: sync(θ_HF → θ_vLLM)      │  │
-│    └───────────────────────────────────────────────────────────┘  │
-│    ┌───────────────────────────────────────────────────────────┐  │
-│    │  Memory Update                                            │  │
-│    │  TODO                                                     │  │
-│    └───────────────────────────────────────────────────────────┘  │
-└───────────────────────────────────────────────────────────────────┘
-```
+
+**参数配置**：  
+
+* `batch_size = 256`：每个 gradient step 的样本数
+* `responses_per_prompt = 16`：每题采样响应数，总生成 `256 × 16 = 4096` 条
+* `gradient_steps = 16`：每次 rollout 后训练的步数
+
+**显存策略**：单 GPU 时间复用。Rollout 阶段仅 vLLM 占用显存，Train 阶段仅 HF 占用显存。通过 checkpoint 目录共享权重。
 
 **数据流** (以 `Batch` 为载体)：
 
 ``` text
-DataLoader
+Phase 1: Rollout (vLLM in GPU)
+──────────────────────────────────────────────────────────────────
+batch = next(data_iter)  # 取 batch_size 个问题
     │
-    ▼ dict[str, list[str]]
-Batch(questions, answers, solutions)
+    ▼ sample.generate_rollout(batch, checkpoint, cfg)
+rollout_buffer: Batch  # 已填充 response_ids，总样本数 = batch_size * responses_per_prompt
+──────────────────────────────────────────────────────────────────
+
+Phase 2: Train (HF in GPU)
+──────────────────────────────────────────────────────────────────
+response_batches = rollout_buffer.split(batch_size, shuffle=True)
+for i in range(gradient_steps):
     │
-    ▼ prompt.build_prompts(batch)
-batch.prompts: list[str]
+    ▼ trainer.update(next(cycle(response_batches)), global_step)
     │
-    ▼ tokenizer(batch.prompts)
-batch.prompt_ids: Tensor[B, prompt_len]
-    │
-    ▼ sample.generate(batch)  # vLLM, detokenize=False
-batch.response_ids: Tensor[B, response_len]
-    │
-    ▼ torch.cat([prompt_ids, response_ids], dim=1)
-batch.input_ids: Tensor[B, seq_len]
-    │
-    ├──► model(input_ids) → logits[:, prompt_len-1:-1, :] → student_log_probs [grad=T]
-    │
-    └──► model([memory_ids, input_ids]) → logits[:, mem_len+prompt_len-1:-1, :] → teacher_log_probs [grad=F]
+    ├──► model(input_ids) → student_logits [grad=T]
+    └──► model(memory + input_ids) → teacher_logits [grad=F]
                 │
                 ▼
-           TopK_ReverseKL(S, T) → loss → backward
+           topk_reverse_kl(S, T) → loss → backward → step
+──────────────────────────────────────────────────────────────────
+trainer.finish_train(global_step)  # 保存 checkpoint
 ```
 
-**权重同步**：每 `sync_interval` 步 `θ_HF → θ_vLLM`。
+**权重共享**：通过 `checkpoint_dir` 目录。每次 Train 结束后保存至 `latest`，下次 Rollout 时加载。
 
-### `sample.generate(batch: Batch) -> Batch`
+
+### `sample.generate_rollout(batch, checkpoint, cfg) -> Batch`
 
 ```python
-SamplingParams(temperature=1.0, max_tokens=512, detokenize=False)
-# 填充 batch.response_ids: Tensor[B, response_len]
+# main.py 调用方式
+rollout_buffer: Batch = generate_rollout(batch, trainer.load_checkpoint, cfg)
 ```
 
-### `trainer.compute_loss(model, batch: Batch) -> Tensor`
+### `trainer.update(batch, global_step) -> int`
 
-``` text
-前置: batch.is_ready_for_train() == True
-
-Student: model(batch.input_ids)
-         logits[:, prompt_len-1:-1, :] → log_softmax → student_log_probs
-         grad=True
-
-Teacher: model(cat[memory_ids, input_ids])
-         logits[:, mem_len+prompt_len-1:-1, :] → log_softmax → teacher_log_probs
-         grad=False (torch.no_grad)
-
-Loss:    topk_vals, topk_idx = student_log_probs.topk(K)
-         teacher_topk = teacher_log_probs.gather(-1, topk_idx)
-         kl = (softmax(topk_vals) * (log_softmax(topk_vals) - log_softmax(teacher_topk))).sum(-1)
-         return kl.mean()
+```python
+# main.py 调用方式
+trainer.start_train()
+for i in range(cfg.gradient_steps):
+    global_step = trainer.update(next(response_iter), global_step)
+trainer.finish_train(global_step)
 ```
 
-### `sync_weights(hf_model, vllm_engine)`
-
-每 N 步或每 epoch 将 HF 权重复制到 vLLM。
 
 ## 3. 目录结构
 
 ``` text
 src/
-├── main.py                      # 入口，训练循环
+├── main.py                      # 入口：RL 风格 rollout + train 循环
 └── context_as_teacher/
-    ├── dataclass.py             # Batch 数据类
-    ├── trainer.py               # compute_loss: HF 双前向 + Top-K KL
-    ├── sample.py                # generate: vLLM 采样 → batch.response_ids
-    ├── sync.py                  # sync_weights: θ_HF → θ_vLLM
+    ├── dataclass.py             # Batch: 数据载体，支持切片/堆叠/设备迁移
+    ├── sample.py                # generate_rollout: vLLM 批量采样
+    ├── trainer.py               # train_step: 单步蒸馏训练
     ├── memory.py                # CachedMemory: prompt 存储 + 版本
-    └── prompt.py                # build_prompts: → batch.prompts
+    └── prompt.py                # build_prompts: questions → prompts
 ```
 
 ## 4. 依赖项
 
 * `torch`
 * `transformers`
-* `trl`
 * `vllm`（采样引擎）
-* `deepspeed`（推荐 ZeRO-2）
-* `accelerate`
+* `datasets`（数据加载）
+* `accelerate`（可选，多卡训练）

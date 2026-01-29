@@ -1,8 +1,33 @@
 """Prompt builders for Deep Think with Confidence."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from transformers import AutoTokenizer
 
-# ============= PROMPT PREPARATION FUNCTIONS =============
+if TYPE_CHECKING:
+    from .dataclass import Batch
+
+
+# ==================== 训练用接口 ====================
+
+
+def build_prompts(batch: Batch, model_name: str) -> list[str]:
+    """为 Batch 中的所有 questions 构建 prompts。
+    
+    Args:
+        batch: 包含 questions 的 Batch
+        model_name: 模型名称（用于加载 tokenizer）
+    
+    Returns:
+        list[str]: 构建好的 prompts
+    """
+    # TODO: 实现批量 prompt 构建
+    pass
+
+
+# ==================== 原有函数 ====================
 
 
 def prepare_prompt(

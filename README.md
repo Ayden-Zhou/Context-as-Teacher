@@ -42,8 +42,6 @@ just check
 **我们的方案：**
 引入一个由 **OPRO** 驱动的 **动态教师 (Dynamic Teacher)**。教师维护着一个包含成功推理模式的“缓存记忆”（不断进化的 Prompt）。随着训练的进行，教师通过更新记忆变得越来越聪明，从而为学生模型提供比简单的标量奖励（Scalar Rewards）更丰富、更稠密的监督信号。
 
-
-
 ## 🧠 核心理念 (Conceptual Framework)
 
 我们将训练过程建模为一个 **记忆巩固 (Memory Consolidation)** 的过程，即从**易变的上下文 (Volatile Context)** 到**持久的参数 (Persistent Weights)** 的知识迁移。
