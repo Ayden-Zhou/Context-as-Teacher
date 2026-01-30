@@ -101,9 +101,8 @@ def build_prompt_ids(
         for q, m in zip(problems, memories)
     ]
 
-    repeat = responses_per_prompt
-    student_ids = [p for p in student_ids for _ in range(repeat)]
-    teacher_ids = [p for p in teacher_ids for _ in range(repeat)]
+    student_ids = [p for p in student_ids for _ in range(responses_per_prompt)]
+    teacher_ids = [p for p in teacher_ids for _ in range(responses_per_prompt)]
 
     return student_ids, teacher_ids
 
