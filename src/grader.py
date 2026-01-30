@@ -1,14 +1,14 @@
-import re
-import regex
 import multiprocessing
+import re
 from math import isclose
 from typing import Union
-from collections import defaultdict
 
-from sympy import simplify, N
-from sympy.parsing.sympy_parser import parse_expr
-from sympy.parsing.latex import parse_latex
+import regex
 from latex2sympy2 import latex2sympy
+from sympy import N, simplify
+from sympy.parsing.latex import parse_latex
+from sympy.parsing.sympy_parser import parse_expr
+
 
 def choice_answer_clean(pred: str):
     pred = pred.strip("\n").rstrip(".").rstrip("/").strip(" ").lstrip(":")
@@ -246,18 +246,19 @@ def math_equal(
 
     return False
 
+
 def math_equal_process(param):
     """
     用于多进程池的包装函数，从参数列表中提取最后两个元素进行数学等价性判断。
-    
+
     Args:
         param: 参数列表或元组，至少包含2个元素
                - param[-2]: 预测值 (prediction)
                - param[-1]: 真实值/参考值 (ground truth/reference)
-    
+
     Returns:
         bool: 如果两个数学表达式等价则返回 True，否则返回 False
-    
+
     Example:
         >>> params = ['some', 'other', 'data', '\\frac{1}{2}', '0.5']
         >>> math_equal_process(params)
@@ -265,8 +266,10 @@ def math_equal_process(param):
     """
     return math_equal(param[-2], param[-1])
 
+
 def numeric_equal(prediction: float, reference: float):
     return isclose(reference, prediction, rel_tol=1e-4)
+
 
 def symbolic_equal(a, b):
     def _parse(s):
@@ -343,6 +346,7 @@ def call_with_timeout(func, *args, timeout=1, **kwargs):
 
     return output_queue.get()
 
+
 if __name__ == "__main__":
     # 测试 normalize_answers：模拟正确答案是 '5\pi + 6\sqrt{3}' 的情况
     def _test_math_equal():
@@ -350,52 +354,71 @@ if __name__ == "__main__":
         print(math_equal("(1,4.5)", "(1,\\frac{9}{2})"))
         print(math_equal("\\frac{x}{7}+\\frac{2}{7}", "\\frac{x+2}{7}", timeout=True))
         print(math_equal("\\sec^2(y)", "\\tan^2(y)+1", timeout=True))
-        print(math_equal("\\begin{pmatrix}-\\frac{7}{4}&-2\\\\4&\\frac{1}{4}\\end{pmatrix}", "(\\begin{pmatrix}-\\frac{7}{4}&-2\\\\4&\\frac{1}{4}\\\\\\end{pmatrix})", timeout=True))
+        print(
+            math_equal(
+                "\\begin{pmatrix}-\\frac{7}{4}&-2\\\\4&\\frac{1}{4}\\end{pmatrix}",
+                "(\\begin{pmatrix}-\\frac{7}{4}&-2\\\\4&\\frac{1}{4}\\\\\\end{pmatrix})",
+                timeout=True,
+            )
+        )
 
         # 测试用例格式: (pred, gt, expected_result)
         test_cases = [
-            ('\\begin{pmatrix}\\frac{1}{3x^{2/3}}&0&0\\\\0&1&0\\\\-\\sin(x)&0&0\\end{pmatrix}',
-             '(\\begin{pmatrix}\\frac{1}{3\\sqrt[3]{x}^2}&0&0\\\\0&1&0\\\\-\\sin(x)&0&0\\\\\\end{pmatrix})', True),
-            ('-\\frac{8x^2}{9(x^2-2)^{5/3}}+\\frac{2}{3(x^2-2)^{2/3}}',
-             '-\\frac{2(x^2+6)}{9(x^2-2)\\sqrt[3]{x^2-2}^2}', True),
-            ('-34x-45y+20z-100=0', '34x+45y-20z+100=0', True),
-            ('\\frac{100}{3}', '33.3', False),
-            ('\\begin{pmatrix}0.290243531202435\\\\0.196008371385084\\\\-0.186381278538813\\end{pmatrix}',
-             '(\\begin{pmatrix}0.29\\\\0.196\\\\-0.186\\\\\\end{pmatrix})', True),
-            ('\\frac{\\sqrt{\\sqrt{11}+\\sqrt{194}}}{2\\sqrt{33}+15}',
-             '\\frac{\\sqrt{\\sqrt{11}+\\sqrt{194}}}{15+2\\sqrt{33}}', True),
-            ('(+5)(b+2)', '(a+5)(b+2)', False),
-            ('\\frac{1+\\sqrt{5}}{2}', '2', False),
-            ('\\frac{34}{16}+\\frac{\\sqrt{1358}}{16}', '4', False),
-            ('1', '1\\\\sqrt{19}', False),
+            (
+                "\\begin{pmatrix}\\frac{1}{3x^{2/3}}&0&0\\\\0&1&0\\\\-\\sin(x)&0&0\\end{pmatrix}",
+                "(\\begin{pmatrix}\\frac{1}{3\\sqrt[3]{x}^2}&0&0\\\\0&1&0\\\\-\\sin(x)&0&0\\\\\\end{pmatrix})",
+                True,
+            ),
+            (
+                "-\\frac{8x^2}{9(x^2-2)^{5/3}}+\\frac{2}{3(x^2-2)^{2/3}}",
+                "-\\frac{2(x^2+6)}{9(x^2-2)\\sqrt[3]{x^2-2}^2}",
+                True,
+            ),
+            ("-34x-45y+20z-100=0", "34x+45y-20z+100=0", True),
+            ("\\frac{100}{3}", "33.3", False),
+            (
+                "\\begin{pmatrix}0.290243531202435\\\\0.196008371385084\\\\-0.186381278538813\\end{pmatrix}",
+                "(\\begin{pmatrix}0.29\\\\0.196\\\\-0.186\\\\\\end{pmatrix})",
+                True,
+            ),
+            (
+                "\\frac{\\sqrt{\\sqrt{11}+\\sqrt{194}}}{2\\sqrt{33}+15}",
+                "\\frac{\\sqrt{\\sqrt{11}+\\sqrt{194}}}{15+2\\sqrt{33}}",
+                True,
+            ),
+            ("(+5)(b+2)", "(a+5)(b+2)", False),
+            ("\\frac{1+\\sqrt{5}}{2}", "2", False),
+            ("\\frac{34}{16}+\\frac{\\sqrt{1358}}{16}", "4", False),
+            ("1", "1\\\\sqrt{19}", False),
             ("(0.6,2.6667]", "(\\frac{3}{5},\\frac{8}{3}]", True),
             ("x+1", "x+2n+1", False),
         ]
-        
-        print("\n" + "="*80)
+
+        print("\n" + "=" * 80)
         print("数学等价性测试")
-        print("="*80)
-        
+        print("=" * 80)
+
         passed = 0
         failed = 0
-        
+
         for i, (pred, gt, expected) in enumerate(test_cases, 1):
             result = math_equal(pred, gt, timeout=True)
             status = "✓ PASS" if result == expected else "✗ FAIL"
-            
+
             if result == expected:
                 passed += 1
             else:
                 failed += 1
-            
+
             print(f"\n测试 {i:2d}: {status}")
             print(f"  预测值: {pred}")
             print(f"  真实值: {gt}")
             print(f"  判断结果: {result} (期望: {expected})")
-        
-        print("\n" + "="*80)
-        print(f"测试总结: 通过 {passed}/{len(test_cases)}, 失败 {failed}/{len(test_cases)}")
-        print("="*80 + "\n")
 
+        print("\n" + "=" * 80)
+        print(
+            f"测试总结: 通过 {passed}/{len(test_cases)}, 失败 {failed}/{len(test_cases)}"
+        )
+        print("=" * 80 + "\n")
 
     _test_math_equal()

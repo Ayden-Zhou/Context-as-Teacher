@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 def sync_weights(hf_model: PreTrainedModel, vllm_sampler: Any) -> None:
     """将 HuggingFace 模型权重同步到 vLLM 引擎。
-    
+
     Args:
         hf_model: HuggingFace 模型
         vllm_sampler: vLLM LLM 实例

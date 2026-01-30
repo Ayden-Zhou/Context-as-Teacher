@@ -7,20 +7,23 @@ main.py
 
 from __future__ import annotations
 
+import gc
 from dataclasses import dataclass
 from pathlib import Path
 
 import torch
-from datasets import load_dataset
-from torch.utils.data import DataLoader
 
 from context_as_teacher.dataclass import Batch
-from context_as_teacher.memory import CachedMemory
-from context_as_teacher.prompt import build_prompt_ids
+from context_as_teacher.prompt import build_prompt_ids, get_tokenizer
 from context_as_teacher.sample import generate_rollout
 from context_as_teacher.trainer import ContextDistillationTrainer
-from utils import Timer, generate_run_id
-
+from utils import (
+    Timer,
+    create_dataloader,
+    generate_run_id,
+    infinite_dataloader,
+    set_global_seed,
+)
 
 # ==================== 配置 ====================
 
@@ -36,10 +39,12 @@ class Config:
     # 数据
     data_path: str = "data/dataset/gsm8k_train.jsonl"
     # RL 风格训练参数
-    batch_size: int = 256        # 每个 gradient step 的 batch 大小
-    responses_per_prompt: int = 16      # 每题采样响应数，总生成 batch_size * num_responses 条
-    gradient_steps: int = 16     # 每次 rollout 后训练的步数
-    total_steps: int = 1000      # 总训练步数
+    batch_size: int = 256  # 每个 gradient step 的 batch 大小
+    responses_per_prompt: int = (
+        16  # 每题采样响应数，总生成 batch_size * num_responses 条
+    )
+    gradient_steps: int = 16  # 每次 rollout 后训练的步数
+    total_steps: int = 1000  # 总训练步数
     # 生成参数
     max_new_tokens: int = 5120
     temperature: float = 1.0
@@ -49,6 +54,9 @@ class Config:
     # 其他
     num_workers: int = 4
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    seed: int = 42
+    pad_token_id: int = 0
+    level: int = 0
 
     @property
     def rollout_size(self) -> int:
@@ -56,46 +64,15 @@ class Config:
         return self.batch_size * self.responses_per_prompt
 
 
-# ==================== 数据加载 ====================
-
-
-def collate_fn(batch: list[dict]) -> Batch:
-    """将 HuggingFace Dataset 的 batch 转换为 Batch 对象"""
-    return Batch(
-        problems=[d["problem"] for d in batch],
-        answers=[d.get("answer", "") for d in batch],
-        memories=[d.get("solution", "") for d in batch],
-    )
-
-
-def create_dataloader(cfg: Config) -> DataLoader:
-    """创建无限循环的 DataLoader"""
-    ds = load_dataset("json", data_files=cfg.data_path, split="train")
-    return DataLoader(
-        ds,
-        batch_size=cfg.batch_size,
-        shuffle=True,
-        num_workers=cfg.num_workers,
-        pin_memory=True,
-        collate_fn=collate_fn,
-        drop_last=True,
-    )
-
-
-def infinite_dataloader(dataloader: DataLoader):
-    """无限循环的数据迭代器"""
-    while True:
-        yield from dataloader
-
-
-# ==================== 主函数 ====================
-
-
 def main(cfg: Config):
     """Rollout → Train → 循环"""
+    set_global_seed(cfg.seed)
+    tokenizer = get_tokenizer(cfg.model_path)
+    pad_id = tokenizer.pad_token_id or tokenizer.eos_token_id
+    cfg.pad_token_id = pad_id
 
     model_name = Path(cfg.model_path).name
-    dataset_name = Path(cfg.data_path).stem  # e.g. "gsm8k_train"
+    dataset_name = f"{Path(cfg.data_path).stem}_{cfg.level}"
     run_id = generate_run_id(model_name, dataset_name)
 
     run_root = Path(cfg.checkpoint_dir) / run_id
@@ -106,7 +83,11 @@ def main(cfg: Config):
     print(f"[init] Run ID: {run_id}")
 
     with Timer("load_data", start="[init] 加载数据集..."):
-        dataloader = create_dataloader(cfg)
+        dataloader = create_dataloader(
+            data_path=cfg.data_path,
+            batch_size=cfg.batch_size,
+            num_workers=cfg.num_workers,
+        )
         data_iter = infinite_dataloader(dataloader)
 
     # memory = CachedMemory()
@@ -122,7 +103,11 @@ def main(cfg: Config):
     # ===== 主循环 =====
     while global_step < cfg.total_steps:
         # Phase 1 Prepare Prompts
-        with Timer(label="prepare_prompts", accumulate=True, start=f"[step {global_step}] Prepare Prompts..."):
+        with Timer(
+            label="prepare_prompts",
+            accumulate=True,
+            start=f"[step {global_step}] Prepare Prompts...",
+        ):
             batch: Batch = next(data_iter)
             batch.student_prompt_ids, batch.teacher_prompt_ids = build_prompt_ids(
                 problems=batch.problems,
@@ -132,7 +117,9 @@ def main(cfg: Config):
             )
             batch = batch.repeat_interleave(cfg.responses_per_prompt)
         # Phase 2: Rollout (vLLM)
-        with Timer(label="rollout", accumulate=True, start=f"[step {global_step}] Rollout..."):
+        with Timer(
+            label="rollout", accumulate=True, start=f"[step {global_step}] Rollout..."
+        ):
             response_ids = generate_rollout(
                 prompt_ids=batch.student_prompt_ids,
                 checkpoint=trainer.load_checkpoint,
@@ -142,12 +129,19 @@ def main(cfg: Config):
             )
             rollout_buffer = batch
             rollout_buffer.response_ids = response_ids
-    
+        gc.collect()
+        torch.cuda.empty_cache()
 
-        # Phase 3: Train 
-        with Timer(label="train", accumulate=True, start=f"[step {global_step}] Train {cfg.gradient_steps} steps..."):
+        # Phase 3: Train
+        with Timer(
+            label="train",
+            accumulate=True,
+            start=f"[step {global_step}] Train {cfg.gradient_steps} steps...",
+        ):
             trainer.start_train()
-            for mini_batch in rollout_buffer.sample_batches(cfg.batch_size, cfg.gradient_steps, cfg.device):
+            for mini_batch in rollout_buffer.sample_batches(
+                cfg.batch_size, cfg.gradient_steps, cfg.device
+            ):
                 global_step = trainer.update(
                     global_step,
                     prompt_ids=mini_batch.student_prompt_ids,
@@ -157,13 +151,13 @@ def main(cfg: Config):
             rollout_count += 1
             trainer.finish_train(global_step, rollout_count)
 
-
     # ===== 保存最终模型 =====
     with Timer(label="save", accumulate=True, start="[done] 保存最终模型..."):
         output_dir = Path("outputs") / run_id
         output_dir.mkdir(parents=True, exist_ok=True)
         # 复制 checkpoint 到 outputs
         import shutil
+
         final_source = (
             latest_checkpoint
             if (latest_checkpoint / "config.json").exists()

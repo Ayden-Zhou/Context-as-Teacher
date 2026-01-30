@@ -27,3 +27,6 @@ notebook:
 clean:
     rm -rf __pycache__ .ruff_cache .ipynb_checkpoints
     find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+
+push:
+    uv run dev_tools.py push

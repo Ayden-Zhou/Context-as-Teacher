@@ -1,10 +1,17 @@
+import random
 from contextlib import ContextDecorator
 from datetime import datetime
+from pathlib import Path
 from time import perf_counter
 from typing import Dict, Iterator, List, Optional, Tuple
-import random
+
 import numpy as np
+import torch
+from datasets import load_dataset
 from math_verify import parse, verify
+from torch.utils.data import DataLoader
+
+from context_as_teacher.dataclass import Batch
 
 _THINK_MARKERS = {
     "qwen": ("<think>", "</think>"),
@@ -14,12 +21,14 @@ _THINK_MARKERS = {
     ),
 }
 
+
 def generate_run_id(model_name, dataset_name) -> str:
     """生成格式为 MMDD_HHMM_XXX 的运行 ID。"""
     now = datetime.now()
     timestamp = now.strftime("%m%d_%H%M")
     random_stamp = random.randint(100, 999)
     return f"{model_name}_{dataset_name}_{timestamp}_{random_stamp:03d}"
+
 
 class Timer(ContextDecorator):
     """轻量计时器。
@@ -185,3 +194,49 @@ def pass_at_k(num_traces: int, num_correct: int, k: int) -> float:
     return 1.0 - np.prod(
         [(num_traces - num_correct - i) / (num_traces - i) for i in range(k)]
     )
+
+
+# ==================== 数据加载与环境设置 ====================
+
+
+def collate_fn(batch: list[dict]) -> Batch:
+    """将 HuggingFace Dataset 的 batch 转换为 Batch 对象"""
+    return Batch(
+        problems=[d["problem"] for d in batch],
+        answers=[d.get("answer", "") for d in batch],
+        memories=[d.get("solution", "") for d in batch],
+    )
+
+
+def create_dataloader(
+    *,
+    data_path: str | Path,
+    batch_size: int,
+    num_workers: int,
+) -> DataLoader:
+    """创建无限循环的 DataLoader"""
+    ds = load_dataset("json", data_files=str(data_path))
+    return DataLoader(
+        ds,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=True,
+        collate_fn=collate_fn,
+        drop_last=True,
+    )
+
+
+def infinite_dataloader(dataloader: DataLoader):
+    """无限循环的数据迭代器"""
+    while True:
+        yield from dataloader
+
+
+def set_global_seed(seed: int) -> None:
+    """设置全局随机种子。"""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)

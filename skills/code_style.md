@@ -34,7 +34,7 @@ Format: # [B, Seq, H] or # [Batch, Heads, Seq, Head_Dim]
 - Fail Fast:
 
   - Do not write try-except blocks to mask errors.
-  - Do not write defensive asserts (unless debugging). 
+  - Do not write defensive asserts (unless debugging).
   - Let native PyTorch RuntimeErrors throw directly to maintain - - the "pseudocode" feel of the code logic.
 
 ## 0.5 注释与文档 (Documentation)
@@ -57,3 +57,20 @@ Google Style Docstrings：
 代码即论文 (Code as Paper)：
     行内注释应解释“为什么” (Why) 而非“做了什么” (What)。
     对于关键算法步骤，必须在注释中引用论文中的**公式编号**或**变量符号** (如 `# Eq. 2: Softmax(QK^T / sqrt(d))`)。
+
+## 5. Version Control (Role: Logger)
+
+**PERMISSIONS**: NO `git` execution. Append-only to `commit_logs.md`.
+
+**LOGGING**:
+
+- **Action**: Append entry per logical change.
+- **Format**: `[{HH:MM}] {File}: {Action}`.
+- **Constraint**: Do NOT delete logs.
+
+**QUALITY GATE** (`src/dev_tools.py`):
+
+- **Logic**: STRICT. Zero `F` errors (F821/F401). Pipeline rejects logical bugs.
+- **Style**: IGNORE. Pipeline executes `ruff format` (Auto-fix imports/layout).
+
+**WORKFLOW**: Modify Code -> Append Log -> (External) `just push`.

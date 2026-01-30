@@ -47,11 +47,12 @@ class ContextDistillationTrainer:
                 trust_remote_code=True,
             )
 
+        attn_impl = self._resolve_attn_implementation()
         self.model = AutoModelForCausalLM.from_pretrained(
             self.load_checkpoint,
             torch_dtype=torch.bfloat16,
             device_map=self.cfg.device,
-            attn_implementation="flash_attention_2",
+            attn_implementation=attn_impl,
             trust_remote_code=True,
         )
 
@@ -77,9 +78,9 @@ class ContextDistillationTrainer:
     def update(
         self,
         global_step: int,
-        prompt_ids: torch.Tensor,
-        response_ids: torch.Tensor,
-        teacher_prompt_ids: torch.Tensor | None = None,
+        prompt_ids: torch.Tensor | list[list[int]],
+        response_ids: torch.Tensor | list[list[int]],
+        teacher_prompt_ids: torch.Tensor | list[list[int]] | None = None,
     ) -> int:
         """执行单步梯度更新，返回更新后的 global_step。
 
@@ -115,9 +116,9 @@ class ContextDistillationTrainer:
     def train_step(
         self,
         *,
-        prompt_ids: torch.Tensor,
-        response_ids: torch.Tensor,
-        teacher_prompt_ids: torch.Tensor | None = None,
+        prompt_ids: torch.Tensor | list[list[int]],
+        response_ids: torch.Tensor | list[list[int]],
+        teacher_prompt_ids: torch.Tensor | list[list[int]] | None = None,
     ) -> torch.Tensor:
         """单步蒸馏训练，返回 loss（不含 backward）。
 
@@ -137,29 +138,51 @@ class ContextDistillationTrainer:
         if self.model is None:
             raise RuntimeError("Model is not initialized")
 
+        pad_id = self.cfg.pad_token_id
+        prompt_ids = self._prepare_ids(prompt_ids, pad_id)
+        response_ids = self._prepare_ids(response_ids, pad_id)
+        if teacher_prompt_ids is not None:
+            teacher_prompt_ids = self._prepare_ids(teacher_prompt_ids, pad_id)
+
         prompt_len = prompt_ids.shape[1]
+        response_mask = response_ids.ne(pad_id)  # [B, response_len]
 
         with autocast("cuda", dtype=torch.bfloat16):
             # Student forward [grad=T]: input = prompt ⊕ response
-            student_input_ids = torch.cat([prompt_ids, response_ids], dim=1)  # [B, prompt_len + response_len]
+            student_input_ids = torch.cat(
+                [prompt_ids, response_ids], dim=1
+            )  # [B, prompt_len + response_len]
             student_outputs = self.model(input_ids=student_input_ids, use_cache=False)
             # 取 response 部分的 logits（预测下一个 token）
-            student_logits = student_outputs.logits[:, prompt_len - 1 : -1, :]  # [B, response_len, V]
+            student_logits = student_outputs.logits[
+                :, prompt_len - 1 : -1, :
+            ]  # [B, response_len, V]
 
             # Teacher forward [grad=F]: input = teacher_prompt ⊕ response
             if teacher_prompt_ids is None:
                 # 无 memory 时，教师 logits 直接用学生 logits（detach）
                 teacher_logits = student_logits.detach()  # [B, response_len, V]
             else:
-                teacher_input_ids = torch.cat([teacher_prompt_ids, response_ids], dim=1)  # [B, teacher_prompt_len + response_len]
+                teacher_input_ids = torch.cat(
+                    [teacher_prompt_ids, response_ids], dim=1
+                )  # [B, teacher_prompt_len + response_len]
                 teacher_prompt_len = teacher_prompt_ids.shape[1]
 
                 with torch.no_grad():
-                    teacher_outputs = self.model(input_ids=teacher_input_ids, use_cache=False)
-                    teacher_logits = teacher_outputs.logits[:, teacher_prompt_len - 1 : -1, :]  # [B, response_len, V]
+                    teacher_outputs = self.model(
+                        input_ids=teacher_input_ids, use_cache=False
+                    )
+                    teacher_logits = teacher_outputs.logits[
+                        :, teacher_prompt_len - 1 : -1, :
+                    ]  # [B, response_len, V]
 
             # Top-K Reverse KL: D_KL^(K)(π_S || π_T)
-            loss = self.topk_reverse_kl(student_logits, teacher_logits, k=self.cfg.top_k)
+            loss = self.topk_reverse_kl(
+                student_logits,
+                teacher_logits,
+                k=self.cfg.top_k,
+                mask=response_mask,
+            )
 
         return loss
 
@@ -168,6 +191,7 @@ class ContextDistillationTrainer:
         student_logits: torch.Tensor,
         teacher_logits: torch.Tensor,
         k: int = 50,
+        mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """计算 Top-K Reverse KL 散度：D_KL^(K)(π_S || π_T)。
 
@@ -178,6 +202,7 @@ class ContextDistillationTrainer:
             student_logits: 学生模型输出 logits。Shape: [B, Seq, V]
             teacher_logits: 教师模型输出 logits。Shape: [B, Seq, V]
             k: Top-K 值，仅在前 k 个 token 上计算 KL。
+            mask: 有效 token mask。Shape: [B, Seq]
 
         Returns:
             平均 KL 散度。Shape: scalar
@@ -194,8 +219,69 @@ class ContextDistillationTrainer:
         teacher_log_probs = F.log_softmax(teacher_topk_logits, dim=-1)  # [B, Seq, K]
 
         # KL(P||Q) = Σ P · (log P - log Q)
-        kl_per_token = (student_probs * (student_log_probs - teacher_log_probs)).sum(-1)  # [B, Seq]
-        return kl_per_token.mean()  # scalar
+        kl_per_token = (student_probs * (student_log_probs - teacher_log_probs)).sum(
+            -1
+        )  # [B, Seq]
+        if mask is None:
+            return kl_per_token.mean()  # scalar
+        mask = mask.to(dtype=kl_per_token.dtype)  # [B, Seq]
+        denom = mask.sum().clamp_min(1)
+        return (kl_per_token * mask).sum() / denom  # scalar
+
+    @staticmethod
+    def _right_pad_ids(
+        ids: list[list[int]],
+        *,
+        pad_id: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Right-pad ragged IDs to a dense tensor.
+
+        Args:
+            ids: Ragged token IDs。Shape: [B, *]
+            pad_id: Padding token ID.
+            device: 目标设备。
+
+        Returns:
+            Right-padded IDs。Shape: [B, Seq]
+        """
+        batch_size = len(ids)
+        max_len = max((len(seq) for seq in ids), default=0)
+        padded = torch.full(
+            (batch_size, max_len),
+            pad_id,
+            dtype=torch.long,
+            device=device,
+        )  # [B, Seq]
+        for row, seq in enumerate(ids):
+            if seq:
+                padded[row, : len(seq)] = torch.tensor(
+                    seq,
+                    dtype=torch.long,
+                    device=device,
+                )
+        return padded
+
+    def _prepare_ids(
+        self,
+        ids: torch.Tensor | list[list[int]],
+        pad_id: int,
+    ) -> torch.Tensor:
+        """确保 token IDs 为右侧 padding 的 Tensor。"""
+        if self.model is None:
+            raise RuntimeError("Model is not initialized")
+        device = next(self.model.parameters()).device
+        if isinstance(ids, torch.Tensor):
+            return ids.to(device)
+        return self._right_pad_ids(ids, pad_id=pad_id, device=device)
+
+    @staticmethod
+    def _resolve_attn_implementation() -> str:
+        """选择注意力实现，优先 Flash Attention 2。"""
+        if not torch.cuda.is_available():
+            return "sdpa"
+        major, minor = torch.cuda.get_device_capability()
+        return "flash_attention_2" if (major, minor) >= (8, 0) else "sdpa"
 
     def finish_train(self, global_step: int, rollout_count: int) -> None:
         """保存模型并释放 GPU 资源。"""

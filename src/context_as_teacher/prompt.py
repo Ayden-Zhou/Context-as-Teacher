@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from transformers import AutoTokenizer
 
 if TYPE_CHECKING:
-    from .dataclass import Batch
+    pass
 
 
 # ==================== 缓存工具 ====================
@@ -23,7 +23,7 @@ def get_tokenizer(model_path: str) -> AutoTokenizer:
 @cache
 def get_template_ids(model_path: str) -> tuple[list[int], list[int]]:
     """缓存 chat template 的前缀和后缀 token ids。
-    
+
     通过占位符拆分模板，避免每次重复 tokenize 固定部分。
     """
     tokenizer = get_tokenizer(model_path)
@@ -43,7 +43,9 @@ def get_template_ids(model_path: str) -> tuple[list[int], list[int]]:
 # ==================== 训练用接口 ====================
 
 
-INSTRUCTION_SUFFIX = "\n\nPlease reason step by step, and put your final answer within \\boxed{}."
+INSTRUCTION_SUFFIX = (
+    "\n\nPlease reason step by step, and put your final answer within \\boxed{}."
+)
 MEMORY_INTRO = "\n\nTo sovle this question, you should follow the following rules: "
 
 
@@ -66,15 +68,15 @@ def build_prompt_ids(
     responses_per_prompt: int,
 ) -> tuple[list[list[int]], list[list[int]]]:
     """为 Batch 构建 student/teacher prompt_ids。
-    
+
     仅对动态内容 tokenize；模板前后缀、指令后缀与 memory 前缀均缓存。
-    
+
     Args:
         problems: 包含 problems 的 list
         memories: 包含 memories 的 list
         model_path: 模型路径（用于加载 tokenizer）
         responses_per_prompt: 每题采样的响应数，用于扩展 prompt_ids
-    
+
     Returns:
         tuple[list[list[int]], list[list[int]]]: (student_prompt_ids, teacher_prompt_ids)
     """
@@ -146,5 +148,3 @@ def sample_prompt(model_path: str, question: str) -> str:
         + "\n\nPlease reason step by step, and put your final answer within \\boxed{}."
     )
     return prepare_prompt(model_path, instruction)
-
-

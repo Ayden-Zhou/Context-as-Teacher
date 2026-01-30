@@ -5,9 +5,12 @@ vLLM 采样模块：Rollout 生成 responses。
 
 from __future__ import annotations
 
+import gc
 from pathlib import Path
 
+import torch
 from vllm import LLM, SamplingParams
+
 
 def generate_rollout(
     prompt_ids: list[list[int]],
@@ -31,7 +34,12 @@ def generate_rollout(
     Returns:
         list[list[int]]: 展开后的 response_ids（长度为 B * R）
     """
-    llm = LLM(model=str(checkpoint), trust_remote_code=True)
+    llm = LLM(
+        model=str(checkpoint),
+        trust_remote_code=True,
+        dtype="bfloat16",
+        gpu_memory_utilization=0.90,
+    )
     params = SamplingParams(
         temperature=temperature,
         max_tokens=max_new_tokens,
@@ -41,11 +49,9 @@ def generate_rollout(
 
     outputs = llm.generate(prompt_token_ids=prompt_ids, sampling_params=params)
 
-    response_ids = [
-        cand.token_ids
-        for output in outputs
-        for cand in output.outputs
-    ]
+    response_ids = [cand.token_ids for output in outputs for cand in output.outputs]
 
     del llm
+    gc.collect()
+    torch.cuda.empty_cache()
     return response_ids
