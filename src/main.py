@@ -8,7 +8,6 @@ main.py
 from __future__ import annotations
 
 from dataclasses import dataclass
-from itertools import cycle
 from pathlib import Path
 
 import torch
@@ -17,6 +16,7 @@ from torch.utils.data import DataLoader
 
 from context_as_teacher.dataclass import Batch
 from context_as_teacher.memory import CachedMemory
+from context_as_teacher.prompt import build_prompt_ids
 from context_as_teacher.sample import generate_rollout
 from context_as_teacher.trainer import ContextDistillationTrainer
 from utils import Timer
@@ -62,9 +62,9 @@ class Config:
 def collate_fn(batch: list[dict]) -> Batch:
     """将 HuggingFace Dataset 的 batch 转换为 Batch 对象"""
     return Batch(
-        questions=[d["problem"] for d in batch],
+        problems=[d["problem"] for d in batch],
         answers=[d.get("answer", "") for d in batch],
-        solutions=[d.get("solution", "") for d in batch],
+        memories=[d.get("solution", "") for d in batch],
     )
 
 
@@ -105,10 +105,9 @@ def main(cfg: Config):
         dataloader = create_dataloader(cfg)
         data_iter = infinite_dataloader(dataloader)
 
-    memory = CachedMemory()
+    # memory = CachedMemory()
     trainer = ContextDistillationTrainer(
         cfg=cfg,
-        memory=memory,
         model_root=model_root,
         latest_checkpoint=latest_checkpoint,
         load_checkpoint=load_checkpoint,
@@ -117,32 +116,44 @@ def main(cfg: Config):
 
     # ===== 主循环 =====
     while global_step < cfg.total_steps:
-
-        # Phase 1: Rollout (vLLM)
-        with Timer("rollout", start=f"[step {global_step}] Rollout..."):
+        # Phase 1 Prepare Prompts
+        with Timer(label="prepare_prompts", accumulate=True, start=f"[step {global_step}] Prepare Prompts..."):
             batch: Batch = next(data_iter)
-            rollout_buffer: Batch = generate_rollout(batch, trainer.load_checkpoint, cfg)
-        # rollout_buffer: Batch，总样本数 = batch_size * num_responses
-
-        # Phase 2: Train (HuggingFace)
-        with Timer("train", start=f"[step {global_step}] Train {cfg.gradient_steps} steps..."):
-            response_batches = list(
-                rollout_buffer.split(cfg.batch_size, shuffle=True)
+            batch.student_prompt_ids, batch.teacher_prompt_ids = build_prompt_ids(
+                problems=batch.problems,
+                memories=batch.memories,
+                model_path=trainer.load_checkpoint,
+                responses_per_prompt=cfg.responses_per_prompt,
             )
-            if not response_batches:
-                continue
+            batch = batch.repeat_interleave(cfg.responses_per_prompt)
+        # Phase 2: Rollout (vLLM)
+        with Timer(label="rollout", accumulate=True, start=f"[step {global_step}] Rollout..."):
+            response_ids = generate_rollout(
+                prompt_ids=batch.student_prompt_ids,
+                checkpoint=trainer.load_checkpoint,
+                max_new_tokens=cfg.max_new_tokens,
+                temperature=cfg.temperature,
+                responses_per_prompt=cfg.responses_per_prompt,
+            )
+            rollout_buffer = batch
+            rollout_buffer.response_ids = response_ids
+    
 
-            response_iter = cycle(response_batches)
+        # Phase 3: Train 
+        with Timer(label="train", accumulate=True, start=f"[step {global_step}] Train {cfg.gradient_steps} steps..."):
             trainer.start_train()
-            for i in range(cfg.gradient_steps):
-                global_step = trainer.update(next(response_iter), global_step)
+            for mini_batch in rollout_buffer.sample_batches(cfg.batch_size, cfg.gradient_steps, cfg.device):
+                global_step = trainer.update(
+                    global_step,
+                    prompt_ids=mini_batch.student_prompt_ids,
+                    response_ids=mini_batch.response_ids,
+                    teacher_prompt_ids=mini_batch.teacher_prompt_ids,
+                )
             trainer.finish_train(global_step)
 
-        # Phase 3: Memory Update (TODO)
-        # memory.update(...)
 
     # ===== 保存最终模型 =====
-    with Timer("save", start="[done] 保存最终模型..."):
+    with Timer(label="save", accumulate=True, start="[done] 保存最终模型..."):
         output_dir = Path("outputs") / model_id
         output_dir.mkdir(parents=True, exist_ok=True)
         # 复制 checkpoint 到 outputs

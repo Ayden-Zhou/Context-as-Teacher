@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import cache
 from typing import TYPE_CHECKING
 
 from transformers import AutoTokenizer
@@ -10,21 +11,101 @@ if TYPE_CHECKING:
     from .dataclass import Batch
 
 
+# ==================== 缓存工具 ====================
+
+
+@cache
+def get_tokenizer(model_path: str) -> AutoTokenizer:
+    """缓存 tokenizer 加载（模型路径相同时复用）"""
+    return AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+
+
+@cache
+def get_template_ids(model_path: str) -> tuple[list[int], list[int]]:
+    """缓存 chat template 的前缀和后缀 token ids。
+    
+    通过占位符拆分模板，避免每次重复 tokenize 固定部分。
+    """
+    tokenizer = get_tokenizer(model_path)
+    placeholder = "<<<PLACEHOLDER>>>"
+    full = tokenizer.apply_chat_template(
+        [{"role": "user", "content": placeholder}],
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    prefix, suffix = full.split(placeholder)
+    return (
+        tokenizer.encode(prefix, add_special_tokens=False),
+        tokenizer.encode(suffix, add_special_tokens=False),
+    )
+
+
 # ==================== 训练用接口 ====================
 
 
-def build_prompts(batch: Batch, model_name: str) -> list[str]:
-    """为 Batch 中的所有 questions 构建 prompts。
+INSTRUCTION_SUFFIX = "\n\nPlease reason step by step, and put your final answer within \\boxed{}."
+MEMORY_INTRO = "\n\nTo sovle this question, you should follow the following rules: "
+
+
+@cache
+def get_instruction_ids(model_path: str) -> list[int]:
+    tokenizer = get_tokenizer(model_path)
+    return tokenizer.encode(INSTRUCTION_SUFFIX, add_special_tokens=False)
+
+
+@cache
+def get_memory_intro_ids(model_path: str) -> list[int]:
+    tokenizer = get_tokenizer(model_path)
+    return tokenizer.encode(MEMORY_INTRO, add_special_tokens=False)
+
+
+def build_prompt_ids(
+    problems: list[str],
+    memories: list[str],
+    model_path: str,
+    responses_per_prompt: int,
+) -> tuple[list[list[int]], list[list[int]]]:
+    """为 Batch 构建 student/teacher prompt_ids。
+    
+    仅对动态内容 tokenize；模板前后缀、指令后缀与 memory 前缀均缓存。
     
     Args:
-        batch: 包含 questions 的 Batch
-        model_name: 模型名称（用于加载 tokenizer）
+        problems: 包含 problems 的 list
+        memories: 包含 memories 的 list
+        model_path: 模型路径（用于加载 tokenizer）
+        responses_per_prompt: 每题采样的响应数，用于扩展 prompt_ids
     
     Returns:
-        list[str]: 构建好的 prompts
+        tuple[list[list[int]], list[list[int]]]: (student_prompt_ids, teacher_prompt_ids)
     """
-    # TODO: 实现批量 prompt 构建
-    pass
+    tokenizer = get_tokenizer(model_path)
+    prefix_ids, suffix_ids = get_template_ids(model_path)
+    instruction_ids = get_instruction_ids(model_path)
+    memory_intro_ids = get_memory_intro_ids(model_path)
+
+    student_ids = [
+        prefix_ids
+        + tokenizer.encode(q, add_special_tokens=False)
+        + instruction_ids
+        + suffix_ids
+        for q in problems
+    ]
+
+    teacher_ids = [
+        prefix_ids
+        + tokenizer.encode(q, add_special_tokens=False)
+        + memory_intro_ids
+        + tokenizer.encode(m, add_special_tokens=False)
+        + instruction_ids
+        + suffix_ids
+        for q, m in zip(problems, memories)
+    ]
+
+    repeat = responses_per_prompt
+    student_ids = [p for p in student_ids for _ in range(repeat)]
+    teacher_ids = [p for p in teacher_ids for _ in range(repeat)]
+
+    return student_ids, teacher_ids
 
 
 # ==================== 原有函数 ====================
@@ -49,43 +130,6 @@ def prepare_prompt(
     return full_prompt
 
 
-def reflect_prompt(
-    model_path: str,
-    failed_samples: list[str],
-    successful_samples: list[str],
-    problem: str,
-) -> str:
-    """Prepare prompt for memory by building instruction and applying template."""
-    fmt = lambda items: "\n\n".join(
-        f"[Sample {i + 1}]\n{s}\n" for i, s in enumerate(items)
-    )
-    failed_text = fmt(failed_samples)
-    successful_text = (
-        fmt(successful_samples) if successful_samples else "None available."
-    )
-
-    instruction = f"""
-        You are a strict math tutor. I provided an assistant to solve the problem for me:
-
-        <Problem>
-        {problem}
-        </Problem>
-
-        <Wrong_Answers>
-        {failed_text}
-        </Wrong_Answers>
-
-        <Correct_Answers>
-        {successful_text}
-        </Correct_Answers>
-        
-        
-        Your task is to write an instruction for the assistant to solve the problem correctly. Put your final instruction within \\boxed{"{}"}.
-        """
-
-    return prepare_prompt(model_path, instruction)
-
-
 def sample_with_memory_prompt(model_path: str, question: str, memory) -> str:
     instruction = (
         question
@@ -105,5 +149,3 @@ def sample_prompt(model_path: str, question: str) -> str:
     return prepare_prompt(model_path, instruction)
 
 
-if __name__ == "__main__":
-    print(reflect_prompt("models/qwen3-1.7b", ["1+1=3"], ["1+1=2"], "1+1=?"))

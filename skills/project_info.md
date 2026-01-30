@@ -17,8 +17,8 @@
 
 * **目标函数**：在每个 token 步长 $t$ 上最小化 Top-K token 的逆向 KL 散度。
 
-    $$J(\theta) = \mathbb{E}_{x \sim \mathcal{D}} \left[ \sum_{t} D_{KL}^{(K)}(\pi_S(\cdot|x_{<t}) || \pi_T(\cdot|m, x_{<t})) \right]$$
-    $$D_{KL}^{(K)}(P_S || P_T) = \sum_{v \in \text{Top-K}(P_S)} \tilde{P}_S(v) \cdot (\log \tilde{P}_S(v) - \log \tilde{P}_T(v))$$
+  $$J(\theta) = \mathbb{E}_{x \sim \mathcal{D}} \left[ \sum_{t} D_{KL}^{(K)}(\pi_S(\cdot|x_{<t}) || \pi_T(\cdot|m, x_{<t})) \right]$$
+  $$D_{KL}^{(K)}(P_S || P_T) = \sum_{v \in \text{Top-K}(P_S)} \tilde{P}_S(v) \cdot (\log \tilde{P}_S(v) - \log \tilde{P}_T(v))$$
 
   * $\tilde{P}$ 表示在 Top-K 集合上重新归一化后的概率值。
 
@@ -37,7 +37,7 @@
 
 ### 整体逻辑（`src/main.py`）
 
-RL 风格 Rollout + Train 循环。每次生成 `batch_size × responses_per_prompt` 条 response，训练 `gradient_steps` 步。
+RL 风格 Prepare → Rollout → Train 循环。每次生成 `batch_size × responses_per_prompt` 条 response，训练 `gradient_steps` 步。
 
 ``` text
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -45,24 +45,26 @@ RL 风格 Rollout + Train 循环。每次生成 `batch_size × responses_per_pro
 │  while global_step < total_steps:                                       │
 │                                                                         │
 │    ┌─────────────────────────────────────────────────────────────────┐  │
-│    │  Phase 1: Rollout (vLLM)                                        │  │
+│    │  Phase 1: Prepare Prompts                                       │  │
 │    │  batch = next(data_iter)  # batch_size 个问题                   │  │
-│    │  rollout_buffer = generate_rollout(batch, checkpoint, cfg)      │  │
+│    │  student_prompt_ids, teacher_prompt_ids = build_prompt_ids(...) │  │
+│    │  batch = batch.repeat_interleave(responses_per_prompt)          │  │
+│    └─────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+│    ┌─────────────────────────────────────────────────────────────────┐  │
+│    │  Phase 2: Rollout (vLLM)                                        │  │
+│    │  response_ids = generate_rollout(student_prompt_ids, ...)       │  │
+│    │  rollout_buffer.response_ids = response_ids                     │  │
 │    │  # rollout_buffer: batch_size × responses_per_prompt 条 response │  │
 │    └─────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
 │    ┌─────────────────────────────────────────────────────────────────┐  │
-│    │  Phase 2: Train (HuggingFace)                                   │  │
-│    │  response_batches = rollout_buffer.split(batch_size, shuffle=T) │  │
+│    │  Phase 3: Train (HuggingFace)                                   │  │
 │    │  trainer.start_train()                                          │  │
-│    │  for i in range(gradient_steps):                                │  │
-│    │      global_step = trainer.update(next(cycle(response_batches)))│  │
+│    │  for mini_batch in rollout_buffer.sample_batches(...):          │  │
+│    │      global_step = trainer.update(global_step, prompt_ids,      │  │
+│    │                        response_ids, teacher_prompt_ids)        │  │
 │    │  trainer.finish_train(global_step)                              │  │
-│    └─────────────────────────────────────────────────────────────────┘  │
-│                                                                         │
-│    ┌─────────────────────────────────────────────────────────────────┐  │
-│    │  Phase 3: Memory Update (optional)                              │  │
-│    │  # memory.update(...)                                           │  │
 │    └─────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -73,29 +75,47 @@ RL 风格 Rollout + Train 循环。每次生成 `batch_size × responses_per_pro
 * `batch_size = 256`：每个 gradient step 的样本数
 * `responses_per_prompt = 16`：每题采样响应数，总生成 `256 × 16 = 4096` 条
 * `gradient_steps = 16`：每次 rollout 后训练的步数
+* `total_steps = 1000`：总训练步数
+* `max_new_tokens = 5120`：生成最大 token 数
+* `temperature = 1.0`：采样温度
+* `top_k = 50`：蒸馏时 Top-K 值
+* `learning_rate = 1e-5`：学习率
 
 **显存策略**：单 GPU 时间复用。Rollout 阶段仅 vLLM 占用显存，Train 阶段仅 HF 占用显存。通过 checkpoint 目录共享权重。
 
 **数据流** (以 `Batch` 为载体)：
 
 ``` text
-Phase 1: Rollout (vLLM in GPU)
+Phase 1: Prepare Prompts
 ──────────────────────────────────────────────────────────────────
 batch = next(data_iter)  # 取 batch_size 个问题
     │
-    ▼ sample.generate_rollout(batch, checkpoint, cfg)
-rollout_buffer: Batch  # 已填充 response_ids，总样本数 = batch_size * responses_per_prompt
+    ▼ build_prompt_ids(problems, memories, model_path, responses_per_prompt)
+batch.student_prompt_ids, batch.teacher_prompt_ids  # 预构建 prompt token ids
+    │
+    ▼ batch.repeat_interleave(responses_per_prompt)
+batch  # 扩展为 batch_size * responses_per_prompt 条
 ──────────────────────────────────────────────────────────────────
 
-Phase 2: Train (HF in GPU)
+Phase 2: Rollout (vLLM in GPU)
 ──────────────────────────────────────────────────────────────────
-response_batches = rollout_buffer.split(batch_size, shuffle=True)
-for i in range(gradient_steps):
     │
-    ▼ trainer.update(next(cycle(response_batches)), global_step)
+    ▼ generate_rollout(prompt_ids, checkpoint, max_new_tokens, temperature, ...)
+response_ids: list[list[int]]  # 生成的 token ids
     │
-    ├──► model(input_ids) → student_logits [grad=T]
-    └──► model(memory + input_ids) → teacher_logits [grad=F]
+rollout_buffer = batch
+rollout_buffer.response_ids = response_ids
+──────────────────────────────────────────────────────────────────
+
+Phase 3: Train (HF in GPU)
+──────────────────────────────────────────────────────────────────
+trainer.start_train()
+for mini_batch in rollout_buffer.sample_batches(batch_size, gradient_steps, device):
+    │
+    ▼ trainer.update(global_step, prompt_ids, response_ids, teacher_prompt_ids)
+    │
+    ├──► model(student_prompt_ids + response_ids) → student_logits [grad=T]
+    └──► model(teacher_prompt_ids + response_ids) → teacher_logits [grad=F]
                 │
                 ▼
            topk_reverse_kl(S, T) → loss → backward → step
@@ -106,23 +126,33 @@ trainer.finish_train(global_step)  # 保存 checkpoint
 **权重共享**：通过 `checkpoint_dir` 目录。每次 Train 结束后保存至 `latest`，下次 Rollout 时加载。
 
 
-### `sample.generate_rollout(batch, checkpoint, cfg) -> Batch`
+### `generate_rollout(prompt_ids, checkpoint, ...) -> list[list[int]]`
 
 ```python
 # main.py 调用方式
-rollout_buffer: Batch = generate_rollout(batch, trainer.load_checkpoint, cfg)
+response_ids = generate_rollout(
+    prompt_ids=batch.student_prompt_ids,
+    checkpoint=trainer.load_checkpoint,
+    max_new_tokens=cfg.max_new_tokens,
+    temperature=cfg.temperature,
+    responses_per_prompt=cfg.responses_per_prompt,
+)
 ```
 
-### `trainer.update(batch, global_step) -> int`
+### `trainer.update(global_step, prompt_ids, response_ids, teacher_prompt_ids) -> int`
 
 ```python
 # main.py 调用方式
 trainer.start_train()
-for i in range(cfg.gradient_steps):
-    global_step = trainer.update(next(response_iter), global_step)
+for mini_batch in rollout_buffer.sample_batches(cfg.batch_size, cfg.gradient_steps, cfg.device):
+    global_step = trainer.update(
+        global_step,
+        prompt_ids=mini_batch.student_prompt_ids,
+        response_ids=mini_batch.response_ids,
+        teacher_prompt_ids=mini_batch.teacher_prompt_ids,
+    )
 trainer.finish_train(global_step)
 ```
-
 
 ## 3. 目录结构
 
