@@ -19,7 +19,7 @@ from context_as_teacher.memory import CachedMemory
 from context_as_teacher.prompt import build_prompt_ids
 from context_as_teacher.sample import generate_rollout
 from context_as_teacher.trainer import ContextDistillationTrainer
-from utils import Timer
+from utils import Timer, generate_run_id
 
 
 # ==================== 配置 ====================
@@ -31,8 +31,8 @@ class Config:
 
     # 模型
     model_path: str = "models/Qwen2.5-0.5B-Instruct"
-    checkpoint_dir: str = "checkpoints"
-    save_model_freq: int = 10
+    checkpoint_dir: str = "models/checkpoints"
+    save_rollout_freq: int = 2  # 每 N 轮 rollout 保存一次model快照
     # 数据
     data_path: str = "data/dataset/gsm8k_train.jsonl"
     # RL 风格训练参数
@@ -94,12 +94,16 @@ def infinite_dataloader(dataloader: DataLoader):
 def main(cfg: Config):
     """Rollout → Train → 循环"""
 
-    model_id = Path(cfg.model_path).name
-    model_root = Path(cfg.checkpoint_dir) / model_id
-    model_root.mkdir(parents=True, exist_ok=True)
-    latest_checkpoint = model_root / "latest"
+    model_name = Path(cfg.model_path).name
+    dataset_name = Path(cfg.data_path).stem  # e.g. "gsm8k_train"
+    run_id = generate_run_id(model_name, dataset_name)
+
+    run_root = Path(cfg.checkpoint_dir) / run_id
+    run_root.mkdir(parents=True, exist_ok=True)
+    latest_checkpoint = run_root / "latest"
 
     load_checkpoint = Path(cfg.model_path)
+    print(f"[init] Run ID: {run_id}")
 
     with Timer("load_data", start="[init] 加载数据集..."):
         dataloader = create_dataloader(cfg)
@@ -108,11 +112,12 @@ def main(cfg: Config):
     # memory = CachedMemory()
     trainer = ContextDistillationTrainer(
         cfg=cfg,
-        model_root=model_root,
+        model_root=run_root,
         latest_checkpoint=latest_checkpoint,
         load_checkpoint=load_checkpoint,
     )
     global_step = 0
+    rollout_count = 0
 
     # ===== 主循环 =====
     while global_step < cfg.total_steps:
@@ -149,12 +154,13 @@ def main(cfg: Config):
                     response_ids=mini_batch.response_ids,
                     teacher_prompt_ids=mini_batch.teacher_prompt_ids,
                 )
-            trainer.finish_train(global_step)
+            rollout_count += 1
+            trainer.finish_train(global_step, rollout_count)
 
 
     # ===== 保存最终模型 =====
     with Timer(label="save", accumulate=True, start="[done] 保存最终模型..."):
-        output_dir = Path("outputs") / model_id
+        output_dir = Path("outputs") / run_id
         output_dir.mkdir(parents=True, exist_ok=True)
         # 复制 checkpoint 到 outputs
         import shutil

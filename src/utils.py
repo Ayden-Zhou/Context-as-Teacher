@@ -1,7 +1,8 @@
 from contextlib import ContextDecorator
+from datetime import datetime
 from time import perf_counter
 from typing import Dict, Iterator, List, Optional, Tuple
-
+import random
 import numpy as np
 from math_verify import parse, verify
 
@@ -13,6 +14,12 @@ _THINK_MARKERS = {
     ),
 }
 
+def generate_run_id(model_name, dataset_name) -> str:
+    """生成格式为 MMDD_HHMM_XXX 的运行 ID。"""
+    now = datetime.now()
+    timestamp = now.strftime("%m%d_%H%M")
+    random_stamp = random.randint(100, 999)
+    return f"{model_name}_{dataset_name}_{timestamp}_{random_stamp:03d}"
 
 class Timer(ContextDecorator):
     """轻量计时器。

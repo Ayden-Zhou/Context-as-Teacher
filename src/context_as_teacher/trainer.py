@@ -197,7 +197,7 @@ class ContextDistillationTrainer:
         kl_per_token = (student_probs * (student_log_probs - teacher_log_probs)).sum(-1)  # [B, Seq]
         return kl_per_token.mean()  # scalar
 
-    def finish_train(self, global_step: int) -> None:
+    def finish_train(self, global_step: int, rollout_count: int) -> None:
         """保存模型并释放 GPU 资源。"""
         if self.model is None:
             return
@@ -206,7 +206,8 @@ class ContextDistillationTrainer:
         self.latest_checkpoint.mkdir(parents=True, exist_ok=True)
         self.model.save_pretrained(self.latest_checkpoint, safe_serialization=True)
 
-        if global_step % self.cfg.save_model_freq == 0:
+        # 每 save_rollout_freq 轮保存快照
+        if rollout_count % self.cfg.save_rollout_freq == 0:
             step_checkpoint = self.model_root / f"step_{global_step:06d}"
             step_checkpoint.mkdir(parents=True, exist_ok=True)
             self.model.save_pretrained(step_checkpoint, safe_serialization=True)
