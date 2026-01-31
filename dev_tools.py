@@ -75,10 +75,10 @@ class DevTools:
 
         return True
 
-    def push(self):
-        """[Pipeline] 自动提交与推送。
+    def commit(self):
+        """[Pipeline] 自动提交。
 
-        流程: 读取日志 -> 质量门控 -> 构造 Commit -> Git Push -> 清空日志
+        流程: 读取日志 -> 质量门控 -> 构造 Commit -> 清空日志
         """
         # 1. 检查日志
         if not LOG_FILE.exists():
@@ -92,23 +92,20 @@ class DevTools:
         logs = [line.strip() for line in raw_logs if line.strip()]
 
         if not logs:
-            print("ℹ️ Commit logs are empty. Nothing to push.")
+            print("ℹ️ Commit logs are empty. Nothing to commit.")
             return
 
         print(f"📝 Found {len(logs)} pending changes.")
 
         # 2. 质量门控 (Ruff)
         if not self._check_quality():
-            print("🛑 Push Aborted: Code quality checks failed.")
+            print("🛑 Commit Aborted: Code quality checks failed.")
             sys.exit(1)
-        # 3. 构造 Commit Message
-        # 自动提取第一条日志作为 Title，其余作为 Body
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-        # 尝试智能提取 feat/fix 前缀，如果没有则默认为 update
+        # 3. 构造 Commit Message
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         first_log = logs[0]
         if ":" in first_log:
-            # 去除时间戳 [14:00] file: msg -> file: msg
             clean_log = (
                 first_log.split("]", 1)[-1].strip() if "]" in first_log else first_log
             )
@@ -120,23 +117,29 @@ class DevTools:
         commit_msg = f"{title}\n\n[Auto-Commit Logs]\n{body}"
 
         # 4. Git 操作
-        print("🚀 Executing Git operations...")
+        print("🚀 Executing Git commit...")
 
-        # Add all
         if not self._run_cmd(["git", "add", "."], error_msg="Git add failed"):
             sys.exit(1)
 
-        # Commit (允许空提交，防止有时候只改了 log 文件本身)
-        self._run_cmd(["git", "commit", "-m", commit_msg], check=False)
-
-        # Push
-        if self._run_cmd(["git", "push"], error_msg="Git push failed"):
-            print("✅ Successfully pushed to remote.")
-
+        if self._run_cmd(["git", "commit", "-m", commit_msg], check=False):
+            print("✅ Successfully committed.")
             # 5. 成功后清空日志
             with open(LOG_FILE, "w", encoding="utf-8") as f:
                 f.write("")
             print("🧹 commit_logs.md cleared.")
+        else:
+            print("❌ Git commit failed.")
+            sys.exit(1)
+
+    def push(self):
+        """[Pipeline] 自动推送。
+
+        流程: Git Push
+        """
+        print("🚀 Executing Git push...")
+        if self._run_cmd(["git", "push"], error_msg="Git push failed"):
+            print("✅ Successfully pushed to remote.")
         else:
             sys.exit(1)
 

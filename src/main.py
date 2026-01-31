@@ -44,7 +44,7 @@ class Config:
         16  # 每题采样响应数，总生成 batch_size * num_responses 条
     )
     gradient_steps: int = 16  # 每次 rollout 后训练的步数
-    total_steps: int = 1000  # 总训练步数
+    num_rollouts: int = 100  # 总 rollout 轮数
     # 生成参数
     max_new_tokens: int = 5120
     temperature: float = 1.0
@@ -101,7 +101,7 @@ def main(cfg: Config):
     rollout_count = 0
 
     # ===== 主循环 =====
-    while global_step < cfg.total_steps:
+    while rollout_count < cfg.num_rollouts:
         # Phase 1 Prepare Prompts
         with Timer(
             label="prepare_prompts",
@@ -173,4 +173,6 @@ def main(cfg: Config):
 
 
 if __name__ == "__main__":
-    main(Config())
+    from fire import Fire
+
+    Fire(lambda **kw: main(Config(**kw)))

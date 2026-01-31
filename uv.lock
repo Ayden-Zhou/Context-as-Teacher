@@ -396,6 +396,7 @@ dependencies = [
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pandas", version = "3.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pyarrow" },
+    { name = "transformers" },
     { name = "trl" },
     { name = "vllm" },
 ]
@@ -417,6 +418,7 @@ requires-dist = [
     { name = "numpy" },
     { name = "pandas" },
     { name = "pyarrow" },
+    { name = "transformers", specifier = ">=5.0.0" },
     { name = "trl" },
     { name = "vllm" },
 ]

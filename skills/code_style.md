@@ -61,6 +61,7 @@ Google Style Docstrings：
 ## 5. Version Control (Role: Logger)
 
 **PERMISSIONS**: NO `git` execution. Append-only to `commit_logs.md`.
+**Language**
 
 **LOGGING**:
 

@@ -125,7 +125,6 @@ trainer.finish_train(global_step)  # 保存 checkpoint
 
 **权重共享**：通过 `checkpoint_dir` 目录。每次 Train 结束后保存至 `latest`，下次 Rollout 时加载。
 
-
 ### `generate_rollout(prompt_ids, checkpoint, ...) -> list[list[int]]`
 
 ```python

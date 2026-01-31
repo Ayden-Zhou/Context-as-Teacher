@@ -34,6 +34,8 @@ services:
     volumes:
       # 挂载项目代码
       - .:/workspace/cat
+      # 隔离容器内虚拟环境，避免覆盖宿主机 .venv
+      - /workspace/cat/.venv
       # 挂载模型目录（NFS 真实路径）
       - /home/data/models/base:/workspace/cat/models
       # 挂载数据目录（NFS 真实路径）
