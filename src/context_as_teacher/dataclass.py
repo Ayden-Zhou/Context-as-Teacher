@@ -17,6 +17,7 @@ class Batch:
 
     # ===== 1. 原始文本 (CPU, List) =====
     problems: list[str] = field(default_factory=list)
+    problem_ids: list[str] = field(default_factory=list)
     answers: list[str] = field(default_factory=list)
     memories: list[str] = field(default_factory=list)
     prompts: list[str] | None = None

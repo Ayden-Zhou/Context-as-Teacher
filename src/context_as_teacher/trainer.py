@@ -81,8 +81,8 @@ class ContextDistillationTrainer:
         prompt_ids: torch.Tensor | list[list[int]],
         response_ids: torch.Tensor | list[list[int]],
         teacher_prompt_ids: torch.Tensor | list[list[int]] | None = None,
-    ) -> int:
-        """执行单步梯度更新，返回更新后的 global_step。
+    ) -> tuple[int, float, float]:
+        """执行单步梯度更新，返回 (global_step, loss, grad_norm)。
 
         Args:
             global_step: 当前全局步数。
@@ -91,7 +91,7 @@ class ContextDistillationTrainer:
             teacher_prompt_ids: 教师 prompt token IDs（含 memory）。Shape: [B, teacher_prompt_len]
 
         Returns:
-            更新后的 global_step。
+            (更新后的 global_step, loss 值, 梯度范数)。
         """
         if self.model is None or self.optimizer is None:
             raise RuntimeError("训练未启动，请先调用 start_train()")
@@ -105,13 +105,20 @@ class ContextDistillationTrainer:
         )
 
         loss.backward()
+        # 计算梯度范数（不 clip，max_norm=inf）
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            self.model.parameters(), max_norm=float("inf")
+        ).item()
         self.optimizer.step()
 
         global_step += 1
+        loss_val = loss.item()
         if global_step % 10 == 0:
-            print(f"       step {global_step}, loss: {loss.item():.4f}")
+            print(
+                f"       step {global_step}, loss: {loss_val:.4f}, grad_norm: {grad_norm:.4f}"
+            )
 
-        return global_step
+        return global_step, loss_val, grad_norm
 
     def train_step(
         self,

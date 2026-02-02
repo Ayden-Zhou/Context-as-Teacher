@@ -46,7 +46,7 @@ RL 风格 Prepare → Rollout → Train 循环。每次生成 `batch_size × res
 │                                                                         │
 │    ┌─────────────────────────────────────────────────────────────────┐  │
 │    │  Phase 1: Prepare Prompts                                       │  │
-│    │  batch = next(data_iter)  # batch_size 个问题                   │  │
+│    │  batch = next(data_iter)  # batch_size 个问题                    │  │
 │    │  student_prompt_ids, teacher_prompt_ids = build_prompt_ids(...) │  │
 │    │  batch = batch.repeat_interleave(responses_per_prompt)          │  │
 │    └─────────────────────────────────────────────────────────────────┘  │
@@ -95,6 +95,8 @@ batch.student_prompt_ids, batch.teacher_prompt_ids  # 预构建 prompt token ids
     │
     ▼ batch.repeat_interleave(responses_per_prompt)
 batch  # 扩展为 batch_size * responses_per_prompt 条
+    │
+    └──产出: problem_ids, run_id, config_snapshot
 ──────────────────────────────────────────────────────────────────
 
 Phase 2: Rollout (vLLM in GPU)
@@ -105,6 +107,8 @@ response_ids: list[list[int]]  # 生成的 token ids
     │
 rollout_buffer = batch
 rollout_buffer.response_ids = response_ids
+    │
+    └──产出: student responses (token ids)
 ──────────────────────────────────────────────────────────────────
 
 Phase 3: Train (HF in GPU)
@@ -121,7 +125,24 @@ for mini_batch in rollout_buffer.sample_batches(batch_size, gradient_steps, devi
            topk_reverse_kl(S, T) → loss → backward → step
 ──────────────────────────────────────────────────────────────────
 trainer.finish_train(global_step)  # 保存 checkpoint
+    │
+    └──产出: loss, grad_norm, global_step, checkpoint
 ```
+
+### 信息产出与存储
+
+**本地**：
+
+* `models/checkpoints/[run_id]/checkpoint_{global_step}.pt`: checkpoint 模型
+* `results/[run_id]/config.json`: 完整 config 快照
+* `results/[run_id]/responses_{global_step}.jsonl`: student responses
+  * 每行: {"problem_id": str, "response_ids": list[int]}
+* `results/[run_id]/loss.jsonl`: 每行: {"global_step": int, "loss": float}
+* `results/[run_id]/grad_norm.jsonl`: 每行: {"global_step": int, "grad_norm": float}
+
+**wandb**：
+
+* `loss`（与 `global_step` 对齐，后续可增补指标）
 
 **权重共享**：通过 `checkpoint_dir` 目录。每次 Train 结束后保存至 `latest`，下次 Rollout 时加载。
 

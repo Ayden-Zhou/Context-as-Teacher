@@ -16,11 +16,32 @@ import fire
 
 # 配置常量
 LOG_FILE = Path("commit_logs.md")
+LOG_PLACEHOLDER = "这里什么都没记录"
 SRC_DIR = Path("src")
 
 
 class DevTools:
     """开发工具链封装"""
+
+    def _write_log_placeholder(self) -> None:
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.write(f"{LOG_PLACEHOLDER}\n")
+
+    def _clean_log_lines(
+        self, raw_lines: list[str]
+    ) -> tuple[list[str], list[str], bool]:
+        clean_lines: list[str] = []
+        has_placeholder = False
+        for line in raw_lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped == LOG_PLACEHOLDER:
+                has_placeholder = True
+                continue
+            clean_lines.append(line if line.endswith("\n") else f"{line}\n")
+        logs = [line.strip() for line in clean_lines]
+        return clean_lines, logs, has_placeholder
 
     def _run_cmd(self, cmd: list[str], check: bool = True, error_msg: str = "") -> bool:
         """执行 Shell 命令的辅助函数。
@@ -82,18 +103,23 @@ class DevTools:
         """
         # 1. 检查日志
         if not LOG_FILE.exists():
-            print("ℹ️ No commit_logs.md found. Creating empty one.")
-            LOG_FILE.touch()
+            print("ℹ️ No commit_logs.md found. Creating placeholder one.")
+            self._write_log_placeholder()
             return
 
         with open(LOG_FILE, "r", encoding="utf-8") as f:
-            raw_logs = f.readlines()
+            raw_lines = f.readlines()
 
-        logs = [line.strip() for line in raw_logs if line.strip()]
+        clean_lines, logs, has_placeholder = self._clean_log_lines(raw_lines)
 
         if not logs:
             print("ℹ️ Commit logs are empty. Nothing to commit.")
+            self._write_log_placeholder()
             return
+
+        if has_placeholder:
+            with open(LOG_FILE, "w", encoding="utf-8") as f:
+                f.writelines(clean_lines)
 
         print(f"📝 Found {len(logs)} pending changes.")
 
@@ -125,9 +151,8 @@ class DevTools:
         if self._run_cmd(["git", "commit", "-m", commit_msg], check=False):
             print("✅ Successfully committed.")
             # 5. 成功后清空日志
-            with open(LOG_FILE, "w", encoding="utf-8") as f:
-                f.write("")
-            print("🧹 commit_logs.md cleared.")
+            self._write_log_placeholder()
+            print("🧹 commit_logs.md reset with placeholder.")
         else:
             print("❌ Git commit failed.")
             sys.exit(1)

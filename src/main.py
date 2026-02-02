@@ -17,6 +17,7 @@ from context_as_teacher.dataclass import Batch
 from context_as_teacher.prompt import build_prompt_ids, get_tokenizer
 from context_as_teacher.sample import generate_rollout
 from context_as_teacher.trainer import ContextDistillationTrainer
+from logger import Logger
 from utils import (
     Timer,
     create_dataloader,
@@ -82,6 +83,10 @@ def main(cfg: Config):
     load_checkpoint = Path(cfg.model_path)
     print(f"[init] Run ID: {run_id}")
 
+    # 初始化 Logger
+    logger = Logger(run_id=run_id, results_root="results")
+    logger.log_config(cfg)
+
     with Timer("load_data", start="[init] 加载数据集..."):
         dataloader = create_dataloader(
             data_path=cfg.data_path,
@@ -129,6 +134,12 @@ def main(cfg: Config):
             )
             rollout_buffer = batch
             rollout_buffer.response_ids = response_ids
+            # 记录 responses
+            logger.log_responses(
+                global_step=global_step,
+                problem_ids=rollout_buffer.problem_ids,
+                response_ids=response_ids,
+            )
         gc.collect()
         torch.cuda.empty_cache()
 
@@ -142,12 +153,13 @@ def main(cfg: Config):
             for mini_batch in rollout_buffer.sample_batches(
                 cfg.batch_size, cfg.gradient_steps, cfg.device
             ):
-                global_step = trainer.update(
+                global_step, loss_val, grad_norm = trainer.update(
                     global_step,
                     prompt_ids=mini_batch.student_prompt_ids,
                     response_ids=mini_batch.response_ids,
                     teacher_prompt_ids=mini_batch.teacher_prompt_ids,
                 )
+                logger.log_step(global_step, loss=loss_val, grad_norm=grad_norm)
             rollout_count += 1
             trainer.finish_train(global_step, rollout_count)
 

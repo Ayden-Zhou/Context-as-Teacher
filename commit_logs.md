@@ -1,12 +1,10 @@
-[14:55] dev_tools.py: Refactor to comply with code_style.md and enhance Quality Gate.
-[14:55] justfile: Add push command to use dev_tools.py.
-[15:10] src: Fix F401 unused import errors to pass Quality Gate.
-[15:15] src/main.py: Remove unused CachedMemory import.
-[15:25] dev_tools.py: Split push into commit and push methods for better workflow.
-[15:35] main.py: Add fire CLI support for Config field override.
-[15:35] justfile: Add run command with args passthrough.
-[15:40] main.py: Replace total_steps with total_rollouts for clearer semantics.
-[16:58] compose.yaml: Add anonymous volume for .venv to avoid host override.
-[17:01] justfile: Pin VIRTUAL_ENV to project root .venv for uv commands.
-[17:02] justfile: Fix VENV variable expansion for justfile_directory.
-[17:05] justfile: Make push run commit before push.
+[17:02] dev_tools.py: 这里什么也没有
+[14:16] skills/project_info.md: 补充阶段产出与存储位置说明
+[14:22] skills/project_info.md: 明确产出字段与存储格式
+[14:26] skills/project_info.md: 去掉 gradient_step 并统一 global_step
+[14:29] skills/project_info.md: 移除 response_text 存储字段
+[14:32] skills/project_info.md: 增加 grad_norm 产出与存储
+[14:38] src/logger.py: 实现最小本地日志与可选 wandb 标量
+[14:44] src/logger.py: 重构为通用 log_step 接口，精简代码
+[14:53] src/main.py, src/context_as_teacher/trainer.py: 集成 Logger，记录 config/responses/loss/grad_norm
+[14:53] src/context_as_teacher/dataclass.py, src/utils.py: 添加 problem_ids 字段与生成逻辑

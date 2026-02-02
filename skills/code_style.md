@@ -58,20 +58,24 @@ Google Style Docstrings：
     行内注释应解释“为什么” (Why) 而非“做了什么” (What)。
     对于关键算法步骤，必须在注释中引用论文中的**公式编号**或**变量符号** (如 `# Eq. 2: Softmax(QK^T / sqrt(d))`)。
 
-## 5. Version Control (Role: Logger)
+## 0.6 CLI & Entry Points
 
-**PERMISSIONS**: NO `git` execution. Append-only to `commit_logs.md`.
-**Language**
+- **CLI Library**: 使用 `fire` 库来完成命令行启动。禁止手动解析 `sys.argv` 或使用 `argparse`。
 
-**LOGGING**:
+## 0.7 Version Control (Role: Logger)
 
-- **Action**: Append entry per logical change.
-- **Format**: `[{HH:MM}] {File}: {Action}`.
-- **Constraint**: Do NOT delete logs.
+**权限**：禁止执行 `git` 命令。仅允许向 `commit_logs.md` 追加内容。
+**语言**：使用中文
 
-**QUALITY GATE** (`src/dev_tools.py`):
+**日志记录**：
 
-- **Logic**: STRICT. Zero `F` errors (F821/F401). Pipeline rejects logical bugs.
-- **Style**: IGNORE. Pipeline executes `ruff format` (Auto-fix imports/layout).
+- **操作**：每个逻辑变更追加一条记录。
+- **格式**：`[{HH:MM}] {文件}: {操作}`。
+- **约束**：严禁删除日志。
 
-**WORKFLOW**: Modify Code -> Append Log -> (External) `just push`.
+**质量门禁** (`src/dev_tools.py`)：
+
+- **逻辑**：严格执行。零 `F` 级错误（如 F821/F401）。流水线将拒绝存在逻辑漏洞的代码。
+- **风格**：忽略。流水线会自动执行 `ruff format`（自动修复导入和布局）。
+
+**工作流**：修改代码 -> 追加日志 -> （外部执行）`just push`。

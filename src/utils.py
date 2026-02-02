@@ -201,8 +201,14 @@ def pass_at_k(num_traces: int, num_correct: int, k: int) -> float:
 
 def collate_fn(batch: list[dict]) -> Batch:
     """将 HuggingFace Dataset 的 batch 转换为 Batch 对象"""
+    import hashlib
+
+    problems = [d["problem"] for d in batch]
+    # 使用 problem 文本的 MD5 前 8 位作为唯一 ID
+    problem_ids = [hashlib.md5(p.encode()).hexdigest()[:8] for p in problems]
     return Batch(
-        problems=[d["problem"] for d in batch],
+        problems=problems,
+        problem_ids=problem_ids,
         answers=[d.get("answer", "") for d in batch],
         memories=[d.get("solution", "") for d in batch],
     )
